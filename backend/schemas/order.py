@@ -1,10 +1,10 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import date
 
 
 class OrderItem(BaseModel):
     product_id: int
-    quantity: int
+    quantity: int = Field(gt = 0)
 
 
 class OrderCreate(BaseModel):
