@@ -3,6 +3,7 @@ from backend.routers.orders import router as orders_router
 
 from backend.database import Base, engine
 from backend.models.product import Product
+from backend.models.order import Order, OrderItem
 
 from backend.routers.products import router as products_router
 Base.metadata.create_all(bind=engine)
