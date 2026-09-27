@@ -21,3 +21,11 @@ class ProductResponse(BaseModel):
     model_config = {
         "from_attributes": True
     }
+
+class ProductUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    price: float | None = None
+    stock: int | None = None
+    active: bool | None = None
+    image_url: str | None = None
