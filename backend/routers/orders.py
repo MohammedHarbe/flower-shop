@@ -99,3 +99,50 @@ def create_order(
         "status": new_order.status,
         "total_price": new_order.total_price
     }
+
+
+@router.get("/orders/{order_id}")
+def get_order(
+    order_id: int,
+    db: Session = Depends(get_db)
+):
+    order = db.query(Order).filter(
+        Order.id == order_id
+    ).first()
+
+    if order is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Order not found"
+        )
+
+    items = db.query(OrderItem).filter(
+        OrderItem.order_id == order_id
+    ).all()
+
+    return {
+        "id": order.id,
+        "customer_name": order.customer_name,
+        "customer_phone": order.customer_phone,
+        "receiver_name": order.receiver_name,
+        "receiver_phone": order.receiver_phone,
+        "delivery_address": order.delivery_address,
+        "delivery_area": order.delivery_area,
+        "delivery_date": order.delivery_date,
+        "delivery_slot": order.delivery_slot,
+        "card_message": order.card_message,
+        "customer_note": order.customer_note,
+        "status": order.status,
+        "total_price": order.total_price,
+        "created_at": order.created_at,
+
+        "items": [
+            {
+                "product_id": item.product_id,
+                "quantity": item.quantity,
+                "unit_price": item.unit_price,
+                "subtotal": item.subtotal
+            }
+            for item in items
+        ]
+    }
