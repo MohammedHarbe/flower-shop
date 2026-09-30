@@ -142,6 +142,21 @@ class OrderTests(unittest.TestCase):
         self.assertEqual(item.price, Decimal("125.50"))
         self.assertEqual(item.name_ar, "ورد")
 
+    def test_product_image_url_requires_http_and_can_be_cleared(self):
+        data = {"name": "Rose", "price": "20.00", "stock": 1}
+        valid = "https://example.com/rose.jpg"
+        self.assertEqual(ProductCreate.model_validate({**data, "image_url": valid}).image_url, valid)
+        self.assertEqual(ProductUpdate.model_validate({"image_url": valid}).image_url, valid)
+        self.assertEqual(
+            ProductUpdate.model_validate({"image_url": None}).model_dump(exclude_unset=True),
+            {"image_url": None},
+        )
+        for invalid in ("string", "/images/rose.jpg", "ftp://example.com/rose.jpg", "javascript:alert(1)", "http://"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValidationError):
+                    ProductCreate.model_validate({**data, "image_url": invalid})
+                with self.assertRaises(ValidationError):
+                    ProductUpdate.model_validate({"image_url": invalid})
     def test_admin_key_denies_unset_missing_and_wrong_key(self):
         unset = Settings(_env_file=None, admin_api_key=SecretStr(""))
         with patch("backend.admin_auth.Settings", return_value=unset):

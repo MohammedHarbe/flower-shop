@@ -1,0 +1,55 @@
+import type { Language, Product } from './types'
+import { moneyAmount } from './types'
+import { ar } from './i18n/ar'
+import { en } from './i18n/en'
+
+export function catalogSlug(value: string): string {
+  return value.trim().toLowerCase().replace(/&/g, 'and').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '')
+}
+
+export function categoryLabel(value: string, language: Language): string {
+  const labels: Record<string, string> = language === 'ar' ? ar.catalog.categories : en.catalog.categories
+  return labels[catalogSlug(value)] || value
+}
+
+export function occasionLabel(value: string, language: Language): string {
+  const labels: Record<string, string> = language === 'ar' ? ar.catalog.occasions : en.catalog.occasions
+  return labels[catalogSlug(value)] || value
+}
+
+export function productName(product: Product, language: Language): string {
+  return language === 'ar' && product.name_ar?.trim() ? product.name_ar : product.name
+}
+
+export function productDescription(product: Product, language: Language): string {
+  return language === 'ar' && product.description_ar?.trim()
+    ? product.description_ar
+    : product.description || ''
+}
+
+export function formatMoney(value: string | number, language: Language): string {
+  return new Intl.NumberFormat(language === 'ar' ? 'ar-EG' : 'en-EG', {
+    style: 'currency',
+    currency: 'EGP',
+    maximumFractionDigits: 2,
+  }).format(moneyAmount(value))
+}
+
+export function formatDate(value: string, language: Language): string {
+  const date = new Date(`${value}T12:00:00`)
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat(language === 'ar' ? 'ar-EG' : 'en-EG', { dateStyle: 'long' }).format(date)
+}
+
+export function todayLocal(): string {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+export function normalizeDigits(value: string): string {
+  return value.replace(/[٠-٩۰-۹]/g, (digit) => {
+    const code = digit.charCodeAt(0)
+    return String(code >= 0x06f0 ? code - 0x06f0 : code - 0x0660)
+  })
+}
