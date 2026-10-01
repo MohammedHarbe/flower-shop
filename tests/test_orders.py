@@ -2,21 +2,17 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from threading import Event
 from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, HTTPException, Response
 from pydantic import SecretStr, ValidationError
-from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy import event, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from backend.admin_auth import require_admin_key
-from backend.database import Base
 from backend.models.order import Order
 from backend.models.product import Product
 from backend.order_status import OrderStatus
@@ -27,16 +23,12 @@ from backend.schemas.product import ProductCreate, ProductUpdate
 from backend.services.email_service import send_order_notification
 from backend.settings import Settings
 from backend.time_utils import CAIRO_TZ, cairo_today
+from tests.db_support import isolated_database
 
 
 class OrderTests(unittest.TestCase):
     def setUp(self):
-        self.engine = create_engine(
-            "sqlite://",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
-        Base.metadata.create_all(self.engine)
+        self.engine = self.enterContext(isolated_database())
         self.db = Session(self.engine)
         self.db.add_all(
             [
@@ -470,13 +462,8 @@ class OrderTests(unittest.TestCase):
         self.assertEqual(self.db.get(Product, 1).stock, 5)
 
     def test_simultaneous_cancellations_restore_stock_once(self):
-        with TemporaryDirectory() as directory:
-            engine = create_engine(
-                f"sqlite:///{Path(directory) / 'concurrent.db'}",
-                connect_args={"check_same_thread": False, "timeout": 5},
-            )
+        with isolated_database(file_backed=True) as engine:
             try:
-                Base.metadata.create_all(engine)
                 with Session(engine) as db:
                     db.add(Product(name="Roses", price=Decimal("100.00"), stock=10, active=True))
                     db.commit()
@@ -604,10 +591,16 @@ class OrderTests(unittest.TestCase):
         self.assertIsNotNone(created.created_at.tzinfo)
         self.assertEqual(created.created_at.tzinfo, CAIRO_TZ)
         stored = self.db.execute(text("SELECT created_at FROM orders WHERE id = :id"), {"id": created.id}).scalar_one()
-        utc_stored = datetime.fromisoformat(stored)
-        self.assertIsNone(utc_stored.tzinfo)
+        if self.engine.dialect.name == "postgresql":
+            self.assertIsInstance(stored, datetime)
+            self.assertIsNotNone(stored.tzinfo)
+            utc_stored = stored.astimezone(timezone.utc)
+        else:
+            utc_stored = datetime.fromisoformat(stored)
+            self.assertIsNone(utc_stored.tzinfo)
+            utc_stored = utc_stored.replace(tzinfo=timezone.utc)
         self.assertAlmostEqual(
-            (created.created_at.astimezone(timezone.utc).replace(tzinfo=None) - utc_stored).total_seconds(),
+            (created.created_at.astimezone(timezone.utc) - utc_stored).total_seconds(),
             0,
             places=3,
         )
@@ -621,7 +614,7 @@ class OrderTests(unittest.TestCase):
 
         def record_update(conn, cursor, statement, parameters, context, executemany):
             if statement.startswith("UPDATE products"):
-                updated_ids.append(parameters[1])
+                updated_ids.append(context.compiled_parameters[0]["id_1"])
 
         event.listen(self.engine, "before_cursor_execute", record_update)
         try:

@@ -31,6 +31,59 @@ free-text delivery slots. New orders require Cairo or Giza and a fixed slot.
 SQLite remains the development default. Set `DATABASE_URL` to a
 `postgresql+psycopg://...` URL when preparing a PostgreSQL deployment.
 
+## Local PostgreSQL on Windows
+
+Both SQLite and PostgreSQL are supported. `Settings` reads the ignored `.env`;
+a `DATABASE_URL` environment variable overrides it for that terminal/process.
+
+| Use | Connection URL example |
+| --- | --- |
+| Local SQLite | `sqlite:///./flower_shop.db` |
+| Local PostgreSQL | `postgresql+psycopg://postgres:YOUR_PASSWORD@localhost:5432/toneflowers` |
+| PostgreSQL tests | `postgresql+psycopg://postgres:YOUR_PASSWORD@localhost:5432/toneflowers_test` |
+
+Keep existing `flower_shop.dp` files and their `.env` configuration if you have
+already used the original SQLite setup. Changing the filename selects another
+database; it does not transfer existing data. PostgreSQL setup does not import
+SQLite data automatically.
+
+Create the development and test databases separately on your local PostgreSQL
+server. Do not use the shop database for automated tests. Passwords must be URL
+encoded when included in a connection URL; do not commit real credentials.
+
+This workstation's verified local installation uses PostgreSQL **18.6** from the
+[EDB Windows binaries](https://www.enterprisedb.com/download-postgresql-binaries),
+under `%LOCALAPPDATA%\ToneFlowers\PostgreSQL18`. It listens only on localhost,
+port 5432, with SCRAM authentication. It is a local process, not a Windows
+service, so start it after a reboot. Its generated password is stored in
+`postgres.credential.xml` encrypted with Windows DPAPI for the current Windows
+user, outside the repository. The existing `.env` was not overwritten.
+
+PowerShell, from the project directory:
+
+```powershell
+$pgRoot = Join-Path $env:LOCALAPPDATA 'ToneFlowers\PostgreSQL18'
+& "$pgRoot\pgsql\bin\pg_ctl.exe" -D "$pgRoot\data" status
+# If the server is stopped:
+& "$pgRoot\pgsql\bin\pg_ctl.exe" -D "$pgRoot\data" -l "$pgRoot\server.log" -o '-h localhost -p 5432' -w start
+
+$pgCredential = Import-Clixml "$pgRoot\postgres.credential.xml"
+$pgPassword = [Uri]::EscapeDataString($pgCredential.GetNetworkCredential().Password)
+$env:DATABASE_URL = "postgresql+psycopg://postgres:${pgPassword}@localhost:5432/toneflowers"
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic check
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
+```
+
+Use the existing website commands below in a second terminal. Stop a running
+backend before replacing it; an occupied port 8000 can leave an older server
+serving a stale schema. Confirm the running `/docs` request schema after a restart.
+
+To return to the `.env` database, stop FastAPI and run
+`Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue` before restarting.
+To select a new SQLite file explicitly, set
+`$env:DATABASE_URL = 'sqlite:///./flower_shop.db'` and apply migrations first.
+
 ## Start the website (second Command Prompt)
 
 ```bat
@@ -120,6 +173,48 @@ cd frontend
 npm ci
 npm run build
 ```
+
+The default suite uses temporary SQLite databases. To run **all database tests
+on PostgreSQL**, explicitly set `TEST_DATABASE_URL` in PowerShell. Merely setting
+`DATABASE_URL` does not opt tests into PostgreSQL. Test credentials are not read
+from `.env`, and the test runner never uses the development URL as its target.
+
+```powershell
+$pgRoot = Join-Path $env:LOCALAPPDATA 'ToneFlowers\PostgreSQL18'
+$pgCredential = Import-Clixml "$pgRoot\postgres.credential.xml"
+$pgPassword = [Uri]::EscapeDataString($pgCredential.GetNetworkCredential().Password)
+$env:TEST_DATABASE_URL = "postgresql+psycopg://postgres:${pgPassword}@localhost:5432/toneflowers_test"
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+# Explicit PostgreSQL HTTP concurrency run:
+.\.venv\Scripts\python.exe -m unittest tests.test_postgres_concurrency -v
+# Return to the SQLite test suite:
+Remove-Item Env:TEST_DATABASE_URL
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+git diff --check
+```
+
+PostgreSQL tests accept only a `postgresql+psycopg` URL for the local database
+named `toneflowers_test`, without URL query options. Each test creates a unique
+`tf_test_...` schema and removes only that schema afterwards. The test role must
+be able to create schemas in that test database. Public tables are not truncated
+or dropped. Migration tests run the entire migration history in empty schemas
+and compare types, nullability, defaults, indexes and foreign keys with the models.
+They also verify that the catalog-default migration preserves existing rows.
+
+The PostgreSQL concurrency tests use independent connections at `READ COMMITTED`
+and real local HTTP requests. They force overlapping attempts for the last stock
+unit, reversed product lists (12 pairs), cancellation, and shared idempotency
+keys. They also cover a replay whose initial lookup precedes the winner's commit,
+then observes exhausted stock, and a second-item failure after the first stock
+decrement. All automated notifications are mocked. The seven PostgreSQL-specific
+tests are explicitly skipped when `TEST_DATABASE_URL` is absent.
+
+PostgreSQL stores `created_at` and `notified_at` as `TIMESTAMP WITH TIME ZONE`.
+SQLite stores naive UTC values; `CairoDateTime` restores timezone information and
+returns `Africa/Cairo` in both cases. Both use Decimal values for `NUMERIC(10, 2)`.
+Migration `20261001_04` removes the catalog flags' old backfill defaults so the
+database matches the ORM; it preserves the flags' existing values and the ORM's
+Python defaults. `alembic check` includes server-default comparison.
 
 ## Before launch
 

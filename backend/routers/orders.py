@@ -134,6 +134,15 @@ def create_order(
             return _replay_order(existing, order, http_response)
         logger.exception("Order insert failed without a matching idempotency key")
         raise HTTPException(500, "Could not save the order") from None
+    except HTTPException:
+        db.rollback()
+        # Under READ COMMITTED a same-key winner can commit after our initial
+        # lookup and exhaust stock before validation or the conditional update.
+        # Replay its saved request instead of reporting a false stock conflict.
+        existing = db.query(Order).filter(Order.idempotency_key == key).one_or_none()
+        if existing is not None:
+            return _replay_order(existing, order, http_response)
+        raise
     except Exception:
         db.rollback()
         raise
