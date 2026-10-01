@@ -61,7 +61,7 @@ function Header() {
       <header className="site-header">
         <div className="header-inner container">
           <BrandLogo />
-          <nav className="desktop-nav" aria-label="Main navigation">
+          <nav className="desktop-nav" aria-label={t.nav.menu}>
             {links.map((link) => <NavLink key={link.to} to={link.to} className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>{link.label}</NavLink>)}
           </nav>
           <div className="header-actions">
@@ -72,7 +72,7 @@ function Header() {
           </div>
         </div>
         {searchOpen && <form className="header-search container" onSubmit={submitSearch} role="search"><label htmlFor="header-search-input" className="sr-only">{t.nav.search}</label><input id="header-search-input" autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t.products.searchPlaceholder} /><button className="button button-primary" type="submit">{t.nav.search}</button></form>}
-        {menuOpen && <nav className="mobile-nav" aria-label="Mobile navigation">{links.map((link) => <Link key={link.to} to={link.to} onClick={() => setMenuOpen(false)}>{link.label}</Link>)}<button type="button" onClick={() => { setSearchOpen(true); setMenuOpen(false) }}>{t.nav.search}</button></nav>}
+        {menuOpen && <nav className="mobile-nav" aria-label={t.nav.menu}>{links.map((link) => <Link key={link.to} to={link.to} onClick={() => setMenuOpen(false)}>{link.label}</Link>)}<button type="button" onClick={() => { setSearchOpen(true); setMenuOpen(false) }}>{t.nav.search}</button></nav>}
       </header>
     </>
   )
@@ -97,7 +97,7 @@ export function Layout({ children }: PropsWithChildren) {
   const { t } = useLanguage()
   useEffect(() => {
     if (location.hash) {
-      window.setTimeout(() => document.getElementById(location.hash.slice(1))?.scrollIntoView({ behavior: 'smooth' }), 50)
+      window.setTimeout(() => document.getElementById(location.hash.slice(1))?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }), 50)
     } else {
       window.scrollTo(0, 0)
     }
