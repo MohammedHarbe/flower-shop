@@ -28,6 +28,24 @@ ALLOWED_TRANSITIONS = {
     OrderStatus.cancelled: set(),
 }
 
+ORDER_REQUEST_FIELDS = (
+    "customer_name", "customer_phone", "customer_email", "receiver_name",
+    "receiver_phone", "governorate", "delivery_address", "delivery_area",
+    "delivery_date", "delivery_slot", "card_message", "sender_name_on_card",
+    "customer_note",
+)
+
+
+def _replay_order(existing: Order, request: OrderCreate, http_response: Response | None) -> OrderResponse:
+    same_fields = all(getattr(existing, field) == getattr(request, field) for field in ORDER_REQUEST_FIELDS)
+    saved_items = sorted((item.product_id, item.quantity) for item in existing.items)
+    requested_items = sorted((item.product_id, item.quantity) for item in request.items)
+    if not same_fields or saved_items != requested_items:
+        raise HTTPException(409, "Idempotency key already used for a different order")
+    if http_response is not None:
+        http_response.status_code = 200
+    return OrderResponse.model_validate(existing)
+
 
 @router.post("/orders", response_model=OrderResponse, status_code=201)
 def create_order(
@@ -39,9 +57,7 @@ def create_order(
     key = str(order.idempotency_key)
     existing = db.query(Order).filter(Order.idempotency_key == key).one_or_none()
     if existing is not None:
-        if http_response is not None:
-            http_response.status_code = 200
-        return OrderResponse.model_validate(existing)
+        return _replay_order(existing, order, http_response)
 
     try:
         validated_items = []
@@ -115,9 +131,7 @@ def create_order(
         # A concurrent request may have committed the same key after our SELECT.
         existing = db.query(Order).filter(Order.idempotency_key == key).one_or_none()
         if existing is not None:
-            if http_response is not None:
-                http_response.status_code = 200
-            return OrderResponse.model_validate(existing)
+            return _replay_order(existing, order, http_response)
         logger.exception("Order insert failed without a matching idempotency key")
         raise HTTPException(500, "Could not save the order") from None
     except Exception:
@@ -168,23 +182,26 @@ def update_order_status(
 ):
     # TODO: Replace the temporary API key with real administrator accounts/auth.
     try:
-        order = db.query(Order).filter(Order.id == order_id).with_for_update().one_or_none()
-        if order is None:
-            raise HTTPException(404, "Order not found")
-
-        current = order.status
         target = status_update.status
-        if target not in ALLOWED_TRANSITIONS[current]:
-            raise HTTPException(409, f"Cannot change order status from {current.value} to {target.value}")
-
-        items = sorted(order.items, key=lambda item: item.product_id) if target == OrderStatus.cancelled else []
+        allowed_sources = [source for source, destinations in ALLOWED_TRANSITIONS.items() if target in destinations]
+        # Claim the transition with the first write. Concurrent cancellation
+        # requests cannot both claim a pending order before restoring stock.
         changed = db.execute(
             update(Order)
-            .where(Order.id == order_id, Order.status == current)
+            .where(Order.id == order_id, Order.status.in_(allowed_sources))
             .values(status=target)
         )
         if changed.rowcount != 1:
-            raise HTTPException(409, "Order status changed; refresh and try again")
+            current_order = db.get(Order, order_id)
+            if current_order is None:
+                raise HTTPException(404, "Order not found")
+            raise HTTPException(409, f"Cannot change order status from {current_order.status.value} to {target.value}")
+
+        order = db.get(Order, order_id)
+        items = (
+            db.query(OrderItem).filter(OrderItem.order_id == order_id).order_by(OrderItem.product_id).all()
+            if target == OrderStatus.cancelled else []
+        )
         for item in items:
             restored = db.execute(
                 update(Product)

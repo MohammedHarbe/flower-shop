@@ -1,6 +1,10 @@
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Event
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -335,6 +339,35 @@ class OrderTests(unittest.TestCase):
         self.assertEqual(len(first_tasks.tasks), 1)
         self.assertEqual(len(replay_tasks.tasks), 0)
 
+    def test_idempotency_rejects_changed_order_payload(self):
+        body = self.payload()
+        created = create_order(OrderCreate.model_validate(body), BackgroundTasks(), self.db)
+        for changes in (
+            {"items": [{"product_id": 1, "quantity": 1}]},
+            {"delivery_address": "2 Different Street"},
+            {"customer_email": "other@example.com"},
+        ):
+            with self.subTest(changes=changes):
+                tasks = BackgroundTasks()
+                with self.assertRaises(HTTPException) as error:
+                    create_order(OrderCreate.model_validate({**body, **changes}), tasks, self.db)
+                self.assertEqual(error.exception.status_code, 409)
+                self.assertEqual(len(tasks.tasks), 0)
+        self.assertEqual(self.db.query(Order).count(), 1)
+        self.assertEqual(self.db.get(Order, created.id).delivery_address, body["delivery_address"])
+        self.assertEqual(self.db.get(Product, 1).stock, 3)
+
+    def test_idempotency_accepts_same_items_in_another_order(self):
+        body = self.payload([{"product_id": 2, "quantity": 1}, {"product_id": 1, "quantity": 2}])
+        created = create_order(OrderCreate.model_validate(body), BackgroundTasks(), self.db)
+        replay = create_order(
+            OrderCreate.model_validate({**body, "items": list(reversed(body["items"]))}),
+            BackgroundTasks(), self.db,
+        )
+        self.assertEqual(replay.id, created.id)
+        self.assertEqual(self.db.get(Product, 1).stock, 3)
+        self.assertEqual(self.db.get(Product, 2).stock, 2)
+
     def test_different_idempotency_keys_create_two_orders(self):
         first = create_order(OrderCreate.model_validate(self.payload()), BackgroundTasks(), self.db)
         second = create_order(OrderCreate.model_validate(self.payload()), BackgroundTasks(), self.db)
@@ -394,6 +427,36 @@ class OrderTests(unittest.TestCase):
         self.assertEqual(self.db.get(Product, 1).stock, 3)
         self.assertEqual(len(replay_tasks.tasks), 0)
 
+    def test_unique_key_race_rejects_changed_payload(self):
+        body = self.payload()
+        create_order(OrderCreate.model_validate(body), BackgroundTasks(), self.db)
+        real_query = self.db.query
+        checks = 0
+
+        class MissedConcurrentOrder:
+            def filter(self, *args):
+                return self
+
+            def one_or_none(self):
+                return None
+
+        def query_with_initial_miss(*entities):
+            nonlocal checks
+            if entities == (Order,) and checks == 0:
+                checks += 1
+                return MissedConcurrentOrder()
+            return real_query(*entities)
+
+        tasks = BackgroundTasks()
+        changed = {**body, "delivery_address": "2 Different Street"}
+        with patch.object(self.db, "query", side_effect=query_with_initial_miss):
+            with self.assertRaises(HTTPException) as error:
+                create_order(OrderCreate.model_validate(changed), tasks, self.db)
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertEqual(self.db.query(Order).count(), 1)
+        self.assertEqual(self.db.get(Product, 1).stock, 3)
+        self.assertEqual(len(tasks.tasks), 0)
+
     def test_cancellation_restores_stock_exactly_once(self):
         created = create_order(OrderCreate.model_validate(self.payload()), BackgroundTasks(), self.db)
         self.assertEqual(self.db.get(Product, 1).stock, 3)
@@ -405,6 +468,68 @@ class OrderTests(unittest.TestCase):
                 update_order_status(created.id, OrderStatusUpdate(status=next_status), self.db)
             self.assertEqual(error.exception.status_code, 409)
         self.assertEqual(self.db.get(Product, 1).stock, 5)
+
+    def test_simultaneous_cancellations_restore_stock_once(self):
+        with TemporaryDirectory() as directory:
+            engine = create_engine(
+                f"sqlite:///{Path(directory) / 'concurrent.db'}",
+                connect_args={"check_same_thread": False, "timeout": 5},
+            )
+            try:
+                Base.metadata.create_all(engine)
+                with Session(engine) as db:
+                    db.add(Product(name="Roses", price=Decimal("100.00"), stock=10, active=True))
+                    db.commit()
+                    created = create_order(
+                        OrderCreate.model_validate(self.payload()), BackgroundTasks(), db,
+                    )
+                    order_id = created.id
+                    self.assertEqual(db.get(Product, 1).stock, 8)
+                    confirmed = update_order_status(order_id, OrderStatusUpdate(status="confirmed"), db)
+                    self.assertEqual(confirmed.status, OrderStatus.confirmed)
+
+                first_updated = Event()
+                second_update_started = Event()
+                release_first = Event()
+
+                def before_update(conn, cursor, statement, parameters, context, executemany):
+                    if statement.startswith("UPDATE orders") and first_updated.is_set():
+                        second_update_started.set()
+
+                def hold_first_update(conn, cursor, statement, parameters, context, executemany):
+                    if statement.startswith("UPDATE orders") and not first_updated.is_set():
+                        first_updated.set()
+                        if not release_first.wait(5):
+                            raise AssertionError("Second cancellation did not start")
+
+                event.listen(engine, "before_cursor_execute", before_update)
+                event.listen(engine, "after_cursor_execute", hold_first_update)
+                try:
+                    def cancel():
+                        with Session(engine) as db:
+                            try:
+                                update_order_status(order_id, OrderStatusUpdate(status="cancelled"), db)
+                                return 200
+                            except HTTPException as error:
+                                return error.status_code
+
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        first = pool.submit(cancel)
+                        self.assertTrue(first_updated.wait(5), "First cancellation did not update the order")
+                        second = pool.submit(cancel)
+                        self.assertTrue(second_update_started.wait(5), "Second cancellation did not reach the update")
+                        release_first.set()
+                        self.assertEqual(sorted((first.result(timeout=10), second.result(timeout=10))), [200, 409])
+                finally:
+                    release_first.set()
+                    event.remove(engine, "before_cursor_execute", before_update)
+                    event.remove(engine, "after_cursor_execute", hold_first_update)
+
+                with Session(engine) as db:
+                    self.assertEqual(db.get(Order, order_id).status, OrderStatus.cancelled)
+                    self.assertEqual(db.get(Product, 1).stock, 10)
+            finally:
+                engine.dispose()
 
     def test_cancellation_failure_rolls_back_status_and_all_stock(self):
         body = self.payload([
