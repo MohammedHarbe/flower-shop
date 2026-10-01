@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, 
 from backend.delivery_region import DeliveryGovernorate
 from backend.delivery_slot import DeliverySlot
 from backend.order_status import OrderStatus
+from backend.payment_method import PaymentMethod
+from backend.payment_status import PaymentStatus
 from backend.phone import normalize_egyptian_mobile
 from backend.time_utils import cairo_today
 
@@ -40,6 +42,12 @@ class OrderCreate(BaseModel):
     delivery_area: Area
     delivery_date: date
     delivery_slot: DeliverySlot
+    payment_method: PaymentMethod = PaymentMethod.cash_on_delivery
+    payment_status: PaymentStatus | None = None
+    delivery_zone_id: int | None = Field(default=None, gt=0)
+    delivery_latitude: float | None = Field(default=None, ge=-90, le=90)
+    delivery_longitude: float | None = Field(default=None, ge=-180, le=180)
+    google_place_id: str | None = Field(default=None, max_length=200)
 
     card_message: str | None = Field(default=None, max_length=500)
     sender_name_on_card: str | None = Field(default=None, max_length=150)
@@ -60,7 +68,12 @@ class OrderCreate(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def unique_products(self) -> "OrderCreate":
+    def default_payment_and_validate_unique_products(self) -> "OrderCreate":
+        if self.payment_method == PaymentMethod.vodafone_cash:
+            self.payment_status = PaymentStatus.awaiting_payment
+        elif self.payment_method == PaymentMethod.cash_on_delivery:
+            self.payment_status = PaymentStatus.unpaid
+
         product_ids = [item.product_id for item in self.items]
         if len(product_ids) != len(set(product_ids)):
             raise ValueError("Each product_id may appear only once in an order")
@@ -93,12 +106,20 @@ class OrderResponse(BaseModel):
     delivery_area: str
     delivery_date: date
     delivery_slot: str
+    payment_method: PaymentMethod
+    payment_status: PaymentStatus
+    delivery_zone_id: int | None
+    delivery_latitude: float | None
+    delivery_longitude: float | None
+    google_place_id: str | None
 
     card_message: str | None
     sender_name_on_card: str | None
     customer_note: str | None
 
     status: OrderStatus
+    subtotal: Decimal
+    delivery_fee: Decimal
     total_price: Decimal
     created_at: datetime
     notified_at: datetime | None
@@ -110,3 +131,9 @@ class OrderStatusUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: OrderStatus
+
+
+class OrderPaymentStatusUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: PaymentStatus

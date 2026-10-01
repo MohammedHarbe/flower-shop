@@ -1,12 +1,15 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, Enum as SAEnum, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Date, Enum as SAEnum, Float, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
 from backend.delivery_region import DeliveryGovernorate
+from backend.models.delivery_zone import DeliveryZone
 from backend.order_status import OrderStatus
+from backend.payment_method import PaymentMethod
+from backend.payment_status import PaymentStatus
 from backend.time_utils import CairoDateTime, cairo_now
 
 
@@ -45,7 +48,36 @@ class Order(Base):
     sender_name_on_card: Mapped[str | None] = mapped_column(String(150), nullable=True)
     customer_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    total_price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    subtotal: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), nullable=False)
+    delivery_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), nullable=False)
+    total_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), nullable=False)
+    payment_method: Mapped[PaymentMethod] = mapped_column(
+        SAEnum(
+            PaymentMethod,
+            native_enum=False,
+            values_callable=lambda enum: [method.value for method in enum],
+            validate_strings=True,
+            length=30,
+        ),
+        default=PaymentMethod.cash_on_delivery,
+        nullable=False,
+    )
+    payment_status: Mapped[PaymentStatus] = mapped_column(
+        SAEnum(
+            PaymentStatus,
+            native_enum=False,
+            values_callable=lambda enum: [status.value for status in enum],
+            validate_strings=True,
+            length=30,
+        ),
+        default=PaymentStatus.unpaid,
+        nullable=False,
+    )
+    delivery_zone_id: Mapped[int | None] = mapped_column(ForeignKey("delivery_zones.id"), nullable=True)
+    delivery_zone: Mapped[DeliveryZone | None] = relationship(back_populates="orders")
+    delivery_latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delivery_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    google_place_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     status: Mapped[OrderStatus] = mapped_column(
         SAEnum(
             OrderStatus,

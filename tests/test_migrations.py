@@ -8,7 +8,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from backend.database import Base
@@ -40,7 +40,13 @@ class MigrationTests(unittest.TestCase):
             }), Base.metadata)
             self.assertEqual(drift, [])
             inspector = inspect(connection)
-            self.assertEqual(set(inspector.get_table_names()), {"alembic_version", "products", "orders", "order_items"})
+            self.assertEqual(set(inspector.get_table_names()), {
+                "alembic_version",
+                "products",
+                "orders",
+                "order_items",
+                "delivery_zones",
+            })
             self.assertEqual(len(inspector.get_foreign_keys("order_items")), 2)
             self.assertTrue(any(
                 item["unique"] and item["column_names"] == ["idempotency_key"]
@@ -53,21 +59,70 @@ class MigrationTests(unittest.TestCase):
 
     def test_catalog_default_migration_preserves_existing_orders_and_products(self):
         self.upgrade("20261001_03")
-        with Session(self.engine) as db:
-            product = Product(name="Existing product", price=Decimal("75.50"), stock=7,
-                              active=True, featured=True, best_seller=False)
-            db.add(product)
-            db.flush()
-            order = Order(
-                idempotency_key=str(uuid4()), customer_name="Customer", customer_phone="+201012345678",
-                receiver_name="Receiver", receiver_phone="+201112345678", delivery_address="Nasr City",
-                delivery_area="Nasr City", delivery_date=cairo_today() + timedelta(days=1),
-                delivery_slot="morning", total_price=Decimal("151.00"), status=OrderStatus.confirmed,
-                items=[OrderItem(product_id=product.id, quantity=2, unit_price=Decimal("75.50"), subtotal=Decimal("151.00"))],
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO products (name, description, price, stock, active, image_url, featured, best_seller, category, occasion, name_ar, description_ar) "
+                    "VALUES (:name, :description, :price, :stock, :active, :image_url, :featured, :best_seller, :category, :occasion, :name_ar, :description_ar)"
+                ),
+                {
+                    "name": "Existing product",
+                    "description": "Historical product",
+                    "price": float(Decimal("75.50")),
+                    "stock": 7,
+                    "active": True,
+                    "image_url": None,
+                    "featured": True,
+                    "best_seller": False,
+                    "category": None,
+                    "occasion": None,
+                    "name_ar": None,
+                    "description_ar": None,
+                },
             )
-            db.add(order)
-            db.commit()
-            product_id, order_id = product.id, order.id
+            product_id = connection.execute(
+                text("SELECT id FROM products WHERE name = :name"),
+                {"name": "Existing product"},
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "INSERT INTO orders (customer_name, customer_phone, receiver_name, receiver_phone, delivery_address, delivery_area, delivery_date, delivery_slot, total_price, status, created_at, governorate, idempotency_key, notified_at) "
+                    "VALUES (:customer_name, :customer_phone, :receiver_name, :receiver_phone, :delivery_address, :delivery_area, :delivery_date, :delivery_slot, :total_price, :status, :created_at, :governorate, :idempotency_key, :notified_at)"
+                ),
+                {
+                    "customer_name": "Customer",
+                    "customer_phone": "+201012345678",
+                    "receiver_name": "Receiver",
+                    "receiver_phone": "+201112345678",
+                    "delivery_address": "Nasr City",
+                    "delivery_area": "Nasr City",
+                    "delivery_date": (cairo_today() + timedelta(days=1)).isoformat(),
+                    "delivery_slot": "morning",
+                    "total_price": float(Decimal("151.00")),
+                    "status": "confirmed",
+                    "created_at": (cairo_today() + timedelta(days=1)).isoformat(),
+                    "governorate": None,
+                    "idempotency_key": str(uuid4()),
+                    "notified_at": None,
+                },
+            )
+            order_id = connection.execute(
+                text("SELECT id FROM orders WHERE customer_phone = :customer_phone ORDER BY id DESC LIMIT 1"),
+                {"customer_phone": "+201012345678"},
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "INSERT INTO order_items (order_id, product_id, quantity, unit_price, subtotal) "
+                    "VALUES (:order_id, :product_id, :quantity, :unit_price, :subtotal)"
+                ),
+                {
+                    "order_id": order_id,
+                    "product_id": product_id,
+                    "quantity": 2,
+                    "unit_price": float(Decimal("75.50")),
+                    "subtotal": float(Decimal("151.00")),
+                },
+            )
         self.upgrade("head")
         with Session(self.engine) as db:
             product, order = db.get(Product, product_id), db.get(Order, order_id)
@@ -75,6 +130,8 @@ class MigrationTests(unittest.TestCase):
             self.assertTrue(product.featured)
             self.assertFalse(product.best_seller)
             self.assertEqual(product.price, Decimal("75.50"))
+            self.assertEqual(order.subtotal, Decimal("151.00"))
+            self.assertEqual(order.delivery_fee, Decimal("0.00"))
             self.assertEqual(order.total_price, Decimal("151.00"))
             self.assertEqual(order.items[0].product_id, product_id)
             self.assertEqual(order.items[0].quantity, 2)

@@ -10,10 +10,14 @@ from sqlalchemy.orm import Session
 from backend.admin_auth import require_admin_key
 from backend.database import get_db
 from backend.logging_utils import log_failure
+from backend.models.delivery_zone import DeliveryZone
 from backend.models.order import Order, OrderItem
 from backend.models.product import Product
 from backend.order_status import OrderStatus
-from backend.schemas.order import OrderCreate, OrderResponse, OrderStatusUpdate
+from backend.payment_method import PaymentMethod
+from backend.payment_status import PaymentStatus
+from backend.schemas.delivery_zone import DeliveryZoneCreate, DeliveryZoneResponse, DeliveryZoneUpdate
+from backend.schemas.order import OrderCreate, OrderPaymentStatusUpdate, OrderResponse, OrderStatusUpdate
 from backend.services.email_service import send_order_notification
 
 
@@ -29,12 +33,30 @@ ALLOWED_TRANSITIONS = {
     OrderStatus.cancelled: set(),
 }
 
+PAYMENT_ALLOWED_TRANSITIONS = {
+    PaymentStatus.awaiting_payment: {PaymentStatus.paid},
+    PaymentStatus.unpaid: {PaymentStatus.paid},
+    PaymentStatus.paid: set(),
+}
+
 ORDER_REQUEST_FIELDS = (
     "customer_name", "customer_phone", "customer_email", "receiver_name",
     "receiver_phone", "governorate", "delivery_address", "delivery_area",
-    "delivery_date", "delivery_slot", "card_message", "sender_name_on_card",
-    "customer_note",
+    "delivery_date", "delivery_slot", "payment_method", "payment_status",
+    "delivery_zone_id", "delivery_latitude", "delivery_longitude", "google_place_id",
+    "card_message", "sender_name_on_card", "customer_note",
 )
+
+
+def _delivery_zone_fee(db: Session, delivery_zone_id: int | None) -> Decimal:
+    if delivery_zone_id is None:
+        return Decimal("0.00")
+    zone = db.get(DeliveryZone, delivery_zone_id)
+    if zone is None:
+        raise HTTPException(404, "Delivery zone not found")
+    if not zone.active:
+        raise HTTPException(400, "Delivery zone is inactive")
+    return Decimal(zone.fee)
 
 
 def _replay_order(existing: Order, request: OrderCreate, http_response: Response | None) -> OrderResponse:
@@ -46,6 +68,61 @@ def _replay_order(existing: Order, request: OrderCreate, http_response: Response
     if http_response is not None:
         http_response.status_code = 200
     return OrderResponse.model_validate(existing)
+
+
+@router.get("/delivery-zones", response_model=list[DeliveryZoneResponse])
+def list_delivery_zones_public(db: Session = Depends(get_db)):
+    return (
+        db.query(DeliveryZone)
+        .filter(DeliveryZone.active.is_(True))
+        .order_by(DeliveryZone.sort_order.asc(), DeliveryZone.id.asc())
+        .all()
+    )
+
+
+@router.get("/delivery-zones/admin", response_model=list[DeliveryZoneResponse])
+def list_delivery_zones_admin(
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_admin_key),
+):
+    return db.query(DeliveryZone).order_by(DeliveryZone.sort_order.asc(), DeliveryZone.id.asc()).all()
+
+
+@router.post("/delivery-zones", response_model=DeliveryZoneResponse, status_code=201)
+def create_delivery_zone(
+    zone: DeliveryZoneCreate,
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_admin_key),
+):
+    record = DeliveryZone(
+        governorate=zone.governorate,
+        name_en=zone.name_en,
+        name_ar=zone.name_ar,
+        fee=zone.fee,
+        active=zone.active,
+        sort_order=zone.sort_order,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+@router.patch("/delivery-zones/{zone_id}", response_model=DeliveryZoneResponse)
+def update_delivery_zone(
+    zone_id: int,
+    zone: DeliveryZoneUpdate,
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_admin_key),
+):
+    record = db.get(DeliveryZone, zone_id)
+    if record is None:
+        raise HTTPException(404, "Delivery zone not found")
+    for field, value in zone.model_dump(exclude_unset=True).items():
+        setattr(record, field, value)
+    db.commit()
+    db.refresh(record)
+    return record
 
 
 @router.post("/orders", response_model=OrderResponse, status_code=201)
@@ -62,7 +139,7 @@ def create_order(
 
     try:
         validated_items = []
-        total_price = Decimal("0.00")
+        subtotal = Decimal("0.00")
         product_names = {}
 
         for item in order.items:
@@ -75,12 +152,13 @@ def create_order(
                 raise HTTPException(409, f"Not enough stock for {product.name}")
 
             unit_price = Decimal(product.price)
-            subtotal = unit_price * item.quantity
-            total_price += subtotal
+            item_subtotal = unit_price * item.quantity
+            subtotal += item_subtotal
             product_names[product.id] = product.name
-            validated_items.append((product, item.quantity, unit_price, subtotal))
+            validated_items.append((product, item.quantity, unit_price, item_subtotal))
 
-        # Consistent lock order reduces deadlocks when PostgreSQL orders overlap.
+        delivery_fee = _delivery_zone_fee(db, order.delivery_zone_id)
+        total_price = subtotal + delivery_fee
         validated_items.sort(key=lambda entry: entry[0].id)
         new_order = Order(
             idempotency_key=key,
@@ -94,24 +172,31 @@ def create_order(
             delivery_area=order.delivery_area,
             delivery_date=order.delivery_date,
             delivery_slot=order.delivery_slot,
+            payment_method=order.payment_method,
+            payment_status=order.payment_status,
+            delivery_zone_id=order.delivery_zone_id,
+            delivery_latitude=order.delivery_latitude,
+            delivery_longitude=order.delivery_longitude,
+            google_place_id=order.google_place_id,
             card_message=order.card_message,
             sender_name_on_card=order.sender_name_on_card,
             customer_note=order.customer_note,
+            subtotal=subtotal,
+            delivery_fee=delivery_fee,
             total_price=total_price,
         )
         db.add(new_order)
         db.flush()
 
-        for product, quantity, unit_price, subtotal in validated_items:
+        for product, quantity, unit_price, item_subtotal in validated_items:
             new_order.items.append(
                 OrderItem(
                     product_id=product.id,
                     quantity=quantity,
                     unit_price=unit_price,
-                    subtotal=subtotal,
+                    subtotal=item_subtotal,
                 )
             )
-            # Conditional update also protects against concurrent orders.
             result = db.execute(
                 update(Product)
                 .where(
@@ -129,7 +214,6 @@ def create_order(
         db.commit()
     except IntegrityError as error:
         db.rollback()
-        # A concurrent request may have committed the same key after our SELECT.
         existing = db.query(Order).filter(Order.idempotency_key == key).one_or_none()
         if existing is not None:
             return _replay_order(existing, order, http_response)
@@ -137,9 +221,6 @@ def create_order(
         raise HTTPException(500, "Could not save the order") from None
     except HTTPException:
         db.rollback()
-        # Under READ COMMITTED a same-key winner can commit after our initial
-        # lookup and exhaust stock before validation or the conditional update.
-        # Replay its saved request instead of reporting a false stock conflict.
         existing = db.query(Order).filter(Order.idempotency_key == key).one_or_none()
         if existing is not None:
             return _replay_order(existing, order, http_response)
@@ -148,7 +229,6 @@ def create_order(
         db.rollback()
         raise
 
-    # Schedule only after commit. JSON-mode data contains no SQLAlchemy objects.
     notification = order_response.model_dump(mode="json")
     for item in notification["items"]:
         item["product_name"] = product_names[item["product_id"]]
@@ -183,6 +263,27 @@ def get_order(
     return order
 
 
+@router.patch("/orders/{order_id}/payment-status", response_model=OrderResponse)
+def update_order_payment_status(
+    order_id: int,
+    payment_update: OrderPaymentStatusUpdate,
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_admin_key),
+):
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(404, "Order not found")
+
+    allowed_targets = PAYMENT_ALLOWED_TRANSITIONS.get(order.payment_status, set())
+    if payment_update.status not in allowed_targets:
+        raise HTTPException(409, f"Cannot change payment status from {order.payment_status.value} to {payment_update.status.value}")
+
+    order.payment_status = payment_update.status
+    db.commit()
+    db.refresh(order)
+    return order
+
+
 @router.patch("/orders/{order_id}/status", response_model=OrderResponse)
 def update_order_status(
     order_id: int,
@@ -190,12 +291,9 @@ def update_order_status(
     db: Session = Depends(get_db),
     _admin: None = Depends(require_admin_key),
 ):
-    # TODO: Replace the temporary API key with real administrator accounts/auth.
     try:
         target = status_update.status
         allowed_sources = [source for source, destinations in ALLOWED_TRANSITIONS.items() if target in destinations]
-        # Claim the transition with the first write. Concurrent cancellation
-        # requests cannot both claim a pending order before restoring stock.
         changed = db.execute(
             update(Order)
             .where(Order.id == order_id, Order.status.in_(allowed_sources))

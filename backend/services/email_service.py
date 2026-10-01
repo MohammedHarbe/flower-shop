@@ -39,12 +39,21 @@ def send_order_notification(order: dict[str, Any]) -> None:
                 f" | subtotal: {Decimal(item['subtotal']):.2f}"
             )
 
+        subtotal = Decimal(order.get("subtotal", order.get("total_price", "0.00")))
+        delivery_fee = Decimal(order.get("delivery_fee", "0.00"))
+        total_price = Decimal(order.get("total_price", subtotal + delivery_fee))
+        payment_method = order.get("payment_method", "cash_on_delivery")
+        payment_status = order.get("payment_status", "unpaid")
+        delivery_zone = order.get("delivery_zone")
+
         body = "\n".join(
             [
                 "New ToneFlowers Order",
                 "",
                 f"Order ID: {order['id']}",
                 f"Order status: {order['status']}",
+                f"Payment method: {payment_method}",
+                f"Payment status: {payment_status}",
                 f"Created time: {order['created_at']}",
                 "",
                 "Customer:",
@@ -62,11 +71,15 @@ def send_order_notification(order: dict[str, Any]) -> None:
                 f"- full address: {order['delivery_address']}",
                 f"- delivery date: {order['delivery_date']}",
                 f"- delivery slot: {order['delivery_slot']}",
+                f"- delivery zone: {delivery_zone or 'Not selected'}",
+                f"- location: {order.get('delivery_latitude', 'n/a')}, {order.get('delivery_longitude', 'n/a')}",
                 "",
                 "Items:",
                 *item_lines,
                 "",
-                f"Total: {Decimal(order['total_price']):.2f}",
+                f"Subtotal: {subtotal:.2f}",
+                f"Delivery fee: {delivery_fee:.2f}",
+                f"Total: {total_price:.2f}",
                 "",
                 f"Card message: {order['card_message'] or 'None'}",
                 f"Sender name on card: {order['sender_name_on_card'] or 'None'}",

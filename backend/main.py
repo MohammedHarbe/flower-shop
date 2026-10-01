@@ -11,6 +11,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from backend.database import get_db
 from backend.logging_utils import log_failure
+from backend.payment_method import PaymentMethod
 from backend.routers.orders import router as orders_router
 from backend.routers.products import router as products_router
 from backend.settings import Settings
@@ -70,6 +71,18 @@ app.add_middleware(
 )
 app.include_router(orders_router)
 app.include_router(products_router)
+
+
+@app.get("/public-config", tags=["config"])
+def public_config() -> dict[str, object]:
+    return {
+        "whatsapp_number": settings.whatsapp_number,
+        "vodafone_cash_number": settings.vodafone_cash_number,
+        "supported_payment_methods": [
+            PaymentMethod.vodafone_cash.value,
+            PaymentMethod.cash_on_delivery.value,
+        ],
+    }
 
 
 @app.get("/health", tags=["health"])

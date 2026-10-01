@@ -19,8 +19,13 @@ class Settings(BaseSettings):
 
     app_env: Literal["development", "staging", "production"] = "development"
     database_url: str = "sqlite:///./flower_shop.dp"
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_origins: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:5174,http://127.0.0.1:5174"
+    )
     admin_api_key: SecretStr = SecretStr("")
+    whatsapp_number: str = ""
+    vodafone_cash_number: str = ""
 
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587

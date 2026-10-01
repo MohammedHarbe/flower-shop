@@ -13,12 +13,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.admin_auth import require_admin_key
+from backend.models.delivery_zone import DeliveryZone
 from backend.models.order import Order
 from backend.models.product import Product
 from backend.order_status import OrderStatus
-from backend.routers.orders import create_order, get_order, list_orders, update_order_status
+from backend.payment_method import PaymentMethod
+from backend.payment_status import PaymentStatus
+from backend.routers.orders import (
+    create_order,
+    get_order,
+    list_orders,
+    update_order_payment_status,
+    update_order_status,
+)
 from backend.routers.products import list_products
-from backend.schemas.order import OrderCreate, OrderStatusUpdate
+from backend.schemas.order import OrderCreate, OrderPaymentStatusUpdate, OrderStatusUpdate
 from backend.schemas.product import ProductCreate, ProductUpdate
 from backend.services.email_service import send_order_notification
 from backend.settings import Settings
@@ -122,6 +131,132 @@ class OrderTests(unittest.TestCase):
         self.assertEqual(updated.items[0].quantity, 2)
         with self.assertRaises(ValidationError):
             OrderStatusUpdate(status="made_up")
+
+    def test_vodafone_cash_and_cod_payment_fields_are_saved(self):
+        zone = DeliveryZone(
+            governorate="Cairo",
+            name_en="Downtown",
+            name_ar="وسط البلد",
+            fee=Decimal("40.00"),
+            active=True,
+            sort_order=1,
+        )
+        self.db.add(zone)
+        self.db.commit()
+
+        created = create_order(
+            OrderCreate.model_validate({
+                **self.payload(items=[{"product_id": 1, "quantity": 1}]),
+                "payment_method": "vodafone_cash",
+                "delivery_zone_id": zone.id,
+            }),
+            BackgroundTasks(),
+            self.db,
+        )
+        self.assertEqual(created.payment_method, PaymentMethod.vodafone_cash)
+        self.assertEqual(created.payment_status, PaymentStatus.awaiting_payment)
+        self.assertEqual(created.subtotal, Decimal("100.00"))
+        self.assertEqual(created.delivery_fee, Decimal("40.00"))
+        self.assertEqual(created.total_price, Decimal("140.00"))
+
+        created_cod = create_order(
+            OrderCreate.model_validate({
+                **self.payload(items=[{"product_id": 2, "quantity": 1}]),
+                "payment_method": "cash_on_delivery",
+                "delivery_zone_id": zone.id,
+            }),
+            BackgroundTasks(),
+            self.db,
+        )
+        self.assertEqual(created_cod.payment_method, PaymentMethod.cash_on_delivery)
+        self.assertEqual(created_cod.payment_status, PaymentStatus.unpaid)
+
+    def test_delivery_zone_fee_is_backend_authoritative_and_rejects_missing_or_inactive_zone(self):
+        zone = DeliveryZone(
+            governorate="Cairo",
+            name_en="Downtown",
+            name_ar="وسط البلد",
+            fee=Decimal("50.00"),
+            active=True,
+            sort_order=1,
+        )
+        self.db.add(zone)
+        self.db.commit()
+
+        created = create_order(
+            OrderCreate.model_validate({
+                **self.payload(items=[{"product_id": 1, "quantity": 1}]),
+                "payment_method": "vodafone_cash",
+                "delivery_zone_id": zone.id,
+            }),
+            BackgroundTasks(),
+            self.db,
+        )
+
+        self.assertEqual(created.subtotal, Decimal("100.00"))
+        self.assertEqual(created.delivery_fee, Decimal("50.00"))
+        self.assertEqual(created.total_price, Decimal("150.00"))
+
+        with self.assertRaises(HTTPException) as error:
+            create_order(
+                OrderCreate.model_validate({
+                    **self.payload(items=[{"product_id": 1, "quantity": 1}]),
+                    "payment_method": "cash_on_delivery",
+                    "delivery_zone_id": 999,
+                }),
+                BackgroundTasks(),
+                self.db,
+            )
+        self.assertEqual(error.exception.status_code, 404)
+
+        zone.active = False
+        self.db.commit()
+        with self.assertRaises(HTTPException) as error:
+            create_order(
+                OrderCreate.model_validate({
+                    **self.payload(items=[{"product_id": 1, "quantity": 1}]),
+                    "payment_method": "cash_on_delivery",
+                    "delivery_zone_id": zone.id,
+                }),
+                BackgroundTasks(),
+                self.db,
+            )
+        self.assertEqual(error.exception.status_code, 400)
+
+    def test_admin_payment_status_updates_only_valid_transitions(self):
+        zone = DeliveryZone(
+            governorate="Cairo",
+            name_en="Downtown",
+            name_ar="وسط البلد",
+            fee=Decimal("25.00"),
+            active=True,
+            sort_order=1,
+        )
+        self.db.add(zone)
+        self.db.commit()
+
+        created = create_order(
+            OrderCreate.model_validate({
+                **self.payload(items=[{"product_id": 1, "quantity": 1}]),
+                "payment_method": "cash_on_delivery",
+                "delivery_zone_id": zone.id,
+            }),
+            BackgroundTasks(),
+            self.db,
+        )
+        updated = update_order_payment_status(
+            created.id,
+            OrderPaymentStatusUpdate(status="paid"),
+            self.db,
+        )
+        self.assertEqual(updated.payment_status, PaymentStatus.paid)
+
+        with self.assertRaises(HTTPException):
+            update_order_payment_status(
+                created.id,
+                OrderPaymentStatusUpdate(status="unpaid"),
+                self.db,
+            )
 
     def test_product_list_only_returns_active_products(self):
         self.assertEqual([product.name for product in list_products(self.db)], ["Roses", "Lilies"])
