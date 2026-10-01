@@ -16,7 +16,7 @@ python -m alembic upgrade head
 python -m uvicorn backend.main:app --reload
 ```
 
-Keep the ignored `.env` file private. Set `ADMIN_API_KEY` to a long random value
+Keep the ignored `.env` file private. Set `ADMIN_API_KEY` to a random value of at least 32 characters
 before using admin routes. Set `SMTP_USERNAME` and `SMTP_PASSWORD` to a Gmail
 account and its App Password to enable owner notifications. The local `.env`
 already has the two requested notification recipients; verify them before use.
@@ -101,15 +101,20 @@ The build checks TypeScript before writing `frontend/dist/`.
 Backend `.env` values are shown in [.env.example](.env.example):
 
 - `DATABASE_URL`: SQLite locally, PostgreSQL URL for production.
+- `APP_ENV`: `development` locally; set `staging` or `production` when deployed.
+  Startup checks require PostgreSQL, a strong admin key, HTTPS origins and mail
+  configuration in those environments. Configured keys shorter than 32 characters
+  are rejected at startup in every environment.
 - `CORS_ORIGINS`: comma-separated explicit frontend origins. Set production
   origins to the deployed site URL; wildcard origins are rejected.
 - `ADMIN_API_KEY`: required for product writes, order status updates, and
-  sensitive order lookup. Send it in `X-Admin-Key`. Replace this temporary gate
-  with real admin accounts before production.
+  sensitive order lookup. Send it in `X-Admin-Key`. This is a temporary private
+  admin mechanism, used only over HTTPS; never embed it in the frontend.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`: Gmail SMTP. The
   password must be an App Password, never a normal account password.
-- `SHOP_NOTIFICATION_EMAILS`: comma-separated owner recipients. The example
-  contains `toneflowerss@gmail.com,midoharpi02@gmail.com`.
+- `SHOP_NOTIFICATION_EMAILS`: comma-separated owner recipients. Public examples
+  use placeholders; the two real recipients stay in the ignored backend `.env`
+  or the deployment secret store.
 
 Frontend `.env` values are shown in [frontend/.env.example](frontend/.env.example):
 
@@ -124,6 +129,9 @@ variables are visible in the browser.
 ## API and order flow
 
 - `GET /products` lists active products; `GET /products/{id}` gets one.
+- `GET /health` is public: `200 {"status":"ok"}` after a read-only `SELECT 1`;
+  a database failure returns `503 {"status":"unavailable"}` without error details.
+  It checks connectivity, not migrations, SMTP delivery or the product catalog.
 - `POST /products` and `PATCH /products/{id}` require `X-Admin-Key`.
 - `POST /orders` is public. Send customer, receiver, delivery, and gift details
   with item `product_id` and `quantity`. Send `governorate` as `Cairo` or `Giza`,
@@ -216,18 +224,329 @@ Migration `20261001_04` removes the catalog flags' old backfill defaults so the
 database matches the ORM; it preserves the flags' existing values and the ORM's
 Python defaults. `alembic check` includes server-default comparison.
 
-## Before launch
+## Staging and production deployment runbook
 
-- Replace the existing development catalog entries with real names, Arabic
-  names, descriptions, prices, stock, and usable `https://` image URLs. Add
-  category, occasion, featured, and best-seller values to enable browsing
-  sections; the site does not invent this merchandise data.
-- Supply Gmail credentials and verify real delivery to both recipients.
-- Replace the temporary admin API key with proper administrator authentication.
-- Use a dependable job queue or outbox when guaranteed email retries are
-  needed; in-process background tasks can be lost if the server stops.
-- Configure the production site origin and HTTPS deployment. Back up the
-  database before future migrations.
+Preparation only: no hosting provider, production database or domain has been
+selected or created by this work. Keep staging separate from production, with
+its own database, credentials and clearly marked test orders. The SQL and shell
+commands below are operator instructions, not automatic startup scripts.
+
+### Architecture and HTTPS
+
+```text
+Customer browser -> React static frontend
+                         | HTTPS API requests
+                         v
+                    FastAPI API -> PostgreSQL
+                         |
+                         +-> Gmail SMTP (STARTTLS)
+```
+
+Serve both frontend and API through HTTPS at the hosting platform or a reverse
+proxy. Customer phone numbers and addresses, and the private `X-Admin-Key`
+header, must be encrypted in transit. No customer login/session system is
+introduced. Redirect public HTTP to HTTPS at the edge. Keep PostgreSQL private
+or allow connections only from the API/deployment service; use the provider's
+verified TLS connection settings for remote database traffic. Do not expose
+the raw Uvicorn listener publicly without the HTTPS edge. Trust forwarded
+headers only from your platform's documented proxy addresses.
+
+### Backend environment and secrets
+
+Set these in the platform's secret/environment settings, not source control:
+
+```dotenv
+APP_ENV=production
+DATABASE_URL=postgresql+psycopg://toneflowers_app:URL_ENCODED_PASSWORD@DB_HOST:5432/toneflowers
+CORS_ORIGINS=https://toneflowers.example
+ADMIN_API_KEY=REPLACE_WITH_A_GENERATED_RANDOM_KEY
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=sender@example.com
+SMTP_PASSWORD=REPLACE_WITH_GMAIL_APP_PASSWORD
+SHOP_NOTIFICATION_EMAILS=owner-one@example.com,owner-two@example.com
+```
+
+Use `APP_ENV=staging` for staging; it applies the same checks. These are
+placeholders, not deployable credentials. Generate the admin key locally with
+`python -c "import secrets; print(secrets.token_urlsafe(32))"` and store the result
+privately. Length validation is a minimum, not an entropy check. Rotate the key
+when access changes. Never pass it in a URL or include it in `VITE_` values.
+Protect Swagger/admin access operationally and keep the key with the owner;
+this shared key has no per-user identity or audit trail. It can serve as an
+initial private admin mechanism for this small shop over HTTPS. Separate admin
+authentication is a later task, not part of this deployment preparation.
+
+Environment variables override the ignored backend `.env`. `.env.*` files are
+also ignored, except `.env.example`. Existing Git history is not rewritten:
+removing private examples from today's files does not erase earlier commits.
+If a credential has ever been shared or committed, replace it before launch.
+
+URL-encode the username/password components, **not the whole database URL**.
+For example, password `example@pass:/?#%` becomes
+`example%40pass%3A%2F%3F%23%25`. When assembling a URL in Python, use
+`urllib.parse.quote(password, safe="")` or SQLAlchemy `URL.create()` rather
+than concatenating an unescaped password. Use the remote `DB_HOST`, not localhost.
+Keep provider TLS parameters, for example `?sslmode=verify-full` with the trusted
+CA configured as required by that provider. Never print a completed secret URL.
+
+Production CORS must name browser origins exactly, without paths, query strings,
+credentials or wildcards. Multiple sites use a comma-separated value:
+
+```dotenv
+CORS_ORIGINS=https://toneflowers.example,https://www.toneflowers.example
+```
+
+Development defaults allow only `http://localhost:5173` and
+`http://127.0.0.1:5173`. Staging/production startup rejects HTTP origins and empty
+origin lists. CORS controls browser access; it does not replace the admin key.
+
+### Restricted PostgreSQL roles
+
+Have the operator provision a dedicated database named `toneflowers` first.
+The following commands assume that database has been explicitly identified;
+do not run them on a shared or unknown database. In `psql`, connected as its
+authorized database administrator, create two non-superuser roles. Use
+`\password` so passwords are prompted rather than written in SQL history:
+
+```sql
+CREATE ROLE toneflowers_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+    NOREPLICATION NOBYPASSRLS;
+CREATE ROLE toneflowers_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+    NOREPLICATION NOBYPASSRLS;
+```
+
+```text
+\password toneflowers_migrator
+\password toneflowers_app
+\connect toneflowers
+```
+
+Configure privileges in that dedicated database:
+
+```sql
+REVOKE ALL ON DATABASE toneflowers FROM PUBLIC;
+GRANT CONNECT ON DATABASE toneflowers TO toneflowers_migrator, toneflowers_app;
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+GRANT USAGE, CREATE ON SCHEMA public TO toneflowers_migrator;
+GRANT USAGE ON SCHEMA public TO toneflowers_app;
+ALTER ROLE toneflowers_app IN DATABASE toneflowers SET search_path = public;
+ALTER ROLE toneflowers_migrator IN DATABASE toneflowers SET search_path = public;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE toneflowers_migrator IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO toneflowers_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE toneflowers_migrator IN SCHEMA public
+    GRANT USAGE, SELECT ON SEQUENCES TO toneflowers_app;
+```
+
+Run `python -m alembic upgrade head` using the **migrator** URL in that deployment
+step. New tables will be owned by `toneflowers_migrator`. Then, as the migrator
+or administrator, apply grants for existing tables and protect migration metadata:
+
+```sql
+GRANT SELECT, INSERT, UPDATE, DELETE
+    ON TABLE public.products, public.orders, public.order_items TO toneflowers_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO toneflowers_app;
+REVOKE ALL ON TABLE public.alembic_version FROM toneflowers_app;
+```
+
+Reapply the metadata revoke after migrations that recreate `alembic_version`.
+If adopting tables created previously by `postgres`, transfer just these owned
+objects as an administrator before the next migration:
+
+```sql
+ALTER TABLE public.products OWNER TO toneflowers_migrator;
+ALTER TABLE public.orders OWNER TO toneflowers_migrator;
+ALTER TABLE public.order_items OWNER TO toneflowers_migrator;
+ALTER TABLE public.alembic_version OWNER TO toneflowers_migrator;
+```
+
+Verify any standalone sequences also have the intended migration owner. Do not
+grant app membership in the migrator role. The app has DML and sequence usage,
+not schema creation, DDL, superuser, database-creation or role-creation powers.
+Default privileges affect only objects created by the named creator role; they
+do not repair existing grants. See PostgreSQL's
+[default privileges reference](https://www.postgresql.org/docs/18/sql-alterdefaultprivileges.html).
+
+A single non-superuser owner role can simplify an initial small installation,
+but it lets a compromised API alter or drop its tables. The two-role setup above
+is the recommended simple choice: migrator credentials exist only during the
+deployment step, while running API workers receive only the app credentials.
+Managed providers may require their database administrator to apply these grants.
+
+### Backups and restore tests
+
+Enable automatic daily provider backups, retain at least **14 daily copies**,
+and keep encrypted copies outside the API host. Enable point-in-time recovery
+when available. A daily-only backup can lose up to 24 hours of orders; choose
+the recovery window with the owner. Alert on backup failures. Take a fresh
+backup before every migration and perform a restore test at least monthly.
+
+Example manual pre-migration logical backup (PostgreSQL 18 client, migrator/backup
+role with read access). Use an interactive password prompt or a protected
+`PGPASSFILE`; never put passwords in command arguments or commit backup files:
+
+```sh
+pg_dump --host=DB_HOST --port=5432 --username=toneflowers_migrator --dbname=toneflowers --format=custom --file=toneflowers-before-migration.dump --no-password
+pg_restore --list toneflowers-before-migration.dump
+```
+
+`--no-password` makes unattended jobs fail if credentials are missing; it does
+not bypass authentication. Set libpq TLS variables (`PGSSLMODE=verify-full`,
+`PGSSLROOTCERT` as needed) for the remote host. The SQLAlchemy
+`postgresql+psycopg://` URL is not a `pg_dump` connection string. Timestamp/archive
+each backup, check the command exit status and upload it to protected backup
+storage. A dump contains customer data and does not include cluster roles;
+keep the role setup separately. Logical dumps supplement provider backups.
+See [pg_dump](https://www.postgresql.org/docs/18/app-pgdump.html).
+
+For a restore drill, have the operator create an **empty isolated** database
+`toneflowers_restore_test` on `RESTORE_HOST` owned by `toneflowers_migrator`.
+Review the destination before running this manually:
+
+```sh
+pg_restore --host=RESTORE_HOST --port=5432 --username=toneflowers_migrator --dbname=toneflowers_restore_test --no-owner --no-privileges --exit-on-error --single-transaction --no-password toneflowers-before-migration.dump
+```
+
+There is deliberately no `--clean` and no automated destructive restore.
+Compare order/item counts, totals, stock, schema revision and health in the
+restored database; reapply app grants if testing the runtime role. No live order
+or email test should run against a restored customer database. A successful
+`--list` alone is not a restore test. See
+[pg_restore](https://www.postgresql.org/docs/18/app-pgrestore.html).
+
+### Safe release sequence and server command
+
+1. Confirm target database, environment and backup destination; take and check
+   a fresh backup. For migrations incompatible with old code, stop accepting
+   orders and gracefully drain API workers before changing the schema.
+2. Run **one** deployment job with the migrator `DATABASE_URL`:
+   `python -m alembic upgrade head`, followed by `python -m alembic check`.
+   Stop the release if either fails. Reapply/review runtime table grants.
+3. Start/restart API workers with the **app** `DATABASE_URL`, and check `/health`.
+4. Build/publish the frontend with its matching API URL and complete staging
+   checks before allowing real customer orders.
+
+Migrations never run in requests or application worker startup. Concurrent
+workers running DDL can race and lock each other. Existing migrations deliberately
+refuse destructive downgrades; review recovery from backups/forward fixes before
+release instead of assuming `alembic downgrade` is safe.
+
+Linux/platform shell, with `PORT` supplied by hosting:
+
+```sh
+python -m uvicorn backend.main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers 1 --no-access-log --timeout-graceful-shutdown 30
+```
+
+PowerShell equivalent (set `PORT` in the service environment):
+
+```powershell
+python -m uvicorn backend.main:app --host 0.0.0.0 --port $env:PORT --workers 1 --no-access-log --timeout-graceful-shutdown 30
+```
+
+Do not use `--reload` in staging/production. Start with one worker for small-shop
+traffic. Consider two only after measuring memory, CPU, request latency and
+PostgreSQL connection capacity; each worker has its own SQLAlchemy pool. Use
+the platform's process supervision/restart policy, not a new local daemon or
+Gunicorn dependency. Give the platform at least the graceful shutdown interval.
+Confirm target-specific Uvicorn/proxy settings with the
+[Uvicorn reference](https://www.uvicorn.org/settings/).
+
+### Logging and customer-facing errors
+
+Startup/shutdown and environment mode are logged. Failures log a safe operation
+description, exception type and code filename/line. They deliberately omit
+exception text, SQL values, headers, request bodies and customer details. SQL
+parameters are hidden on the runtime engine. Unexpected API failures return
+generic JSON `500`; health database failures return `503`. Expected validation,
+stock, product, delivery-region and replay-conflict errors retain their existing
+HTTP behavior. Debug responses are disabled.
+
+The production command disables access logs to avoid recording client IPs and
+query strings unnecessarily. Configure hosting/proxy logs similarly: never log
+`X-Admin-Key`, credentials, request bodies or full database URLs. Store operational
+logs with restricted access and retention. Safe logs trade detailed exception
+messages for privacy; reproduce failures with synthetic data for diagnosis.
+
+### Email setup and delivery limits
+
+The locally verified path uses Gmail SMTP on port 587 with STARTTLS and a Gmail
+App Password. Both owner recipients remain configured privately in
+`SHOP_NOTIFICATION_EMAILS`; neither address belongs in public examples. The
+previous approved local order reached SMTP acceptance for both recipients and
+inbox receipt was confirmed for one; the other owner's inbox confirmation is
+still outstanding. No email is sent by this preparation task or automated tests.
+
+At staging launch, obtain authorization for a clearly marked TEST ONLY order
+and confirm receipt in **both** owner inboxes. `notified_at` means SMTP accepted
+all recipients; it does not prove inbox delivery. Partial recipient refusal can
+mean one recipient already received the email. Do not blindly resend.
+
+Notifications run in the existing in-process background task. Graceful shutdown
+usually lets tasks finish, but a crash can lose a notification and there is no
+automatic retry. The owner must check the private order list and investigate
+null `notified_at` records; never rely solely on email for fulfillment. SMTP
+acceptance followed by a marker-write failure can also leave that value null.
+
+### Frontend production build and SPA routing
+
+The API base is configured in one place, `frontend/src/config.ts`, through
+`VITE_API_URL`. Its localhost fallback is for development; components contain
+no localhost API URLs. Set the real API URL **before** building. Vite substitutes
+these public variables at build time, so changing the host environment after
+building does not update an existing bundle; rebuild it.
+
+```dotenv
+VITE_API_URL=https://api.example.com
+VITE_PHONE=PUBLIC_SHOP_PHONE
+VITE_EMAIL=public-contact@example.com
+VITE_FACEBOOK_URL=https://www.facebook.com/YOUR_PUBLIC_PAGE
+VITE_INSTAGRAM_URL=
+VITE_WHATSAPP_URL=
+```
+
+Leave the existing optional WhatsApp field empty; this task adds no WhatsApp
+integration. Set only intentional public contact details. All `VITE_` values are
+visible to visitors. No database URL, admin key or SMTP credential goes here.
+
+```sh
+cd frontend
+npm ci
+npm run build
+```
+
+Serve `frontend/dist/` from static hosting. Configure an internal fallback to
+`index.html` for unmatched application routes, after checking real static files.
+Direct visits/refreshes to `/products/3`, `/checkout` and `/about` must load React
+Router instead of a hosting 404. Keep API routing and missing asset handling
+separate from the SPA fallback. No provider-specific config is created until a
+deployment target is chosen.
+
+### Staging launch checklist
+
+- [ ] Choose frontend/API hosting and a separate production-like PostgreSQL staging database.
+- [ ] Configure restricted app/migration roles; verify app DML works and DDL is denied.
+- [ ] Configure all real backend variables and `APP_ENV=staging`; generate a fresh strong admin key.
+- [ ] Configure exact HTTPS CORS origins and build-time `VITE_API_URL`.
+- [ ] Enable HTTPS for frontend/API and verify database TLS/network restrictions.
+- [ ] Verify automatic backups, retention, pre-migration backup and an isolated restore drill.
+- [ ] Apply migrations once with the migrator role; `alembic check` passes.
+- [ ] Start the API with the app role; unauthenticated `GET /health` returns 200.
+- [ ] Verify sensitive order routes reject missing/wrong admin keys.
+- [ ] Replace test products with real Arabic/English names, images, prices and stock.
+- [ ] Check direct SPA routes, refreshes and mobile checkout on a real device.
+- [ ] With owner approval, place one TEST ONLY order; verify fields, total, Cairo time and stock.
+- [ ] Confirm one notification in both owner inboxes and non-null `notified_at`.
+- [ ] Verify the test order in the private admin list.
+- [ ] Cancel through the admin status endpoint; stock returns exactly once.
+- [ ] Verify same-key replay/conflict behavior and no duplicate notification.
+- [ ] Review sanitized logs, restart behavior and the owner's manual notification-failure procedure.
+- [ ] Complete all checks before a separate production deployment approval.
+
+Remaining launch blockers: choose hosting/domains, provision environment-specific
+database/roles/secrets, enable HTTPS and backups, confirm both recipient inboxes,
+replace the test catalog, and perform the approved staging/mobile checks. No
+production deployment or external configuration has been performed here.
 
 The authentic ToneFlowers logo is sourced from the shop's public Facebook
 profile. The homepage floral photograph is an original generated site asset.

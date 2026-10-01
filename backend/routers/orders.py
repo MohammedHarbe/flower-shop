@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from backend.admin_auth import require_admin_key
 from backend.database import get_db
+from backend.logging_utils import log_failure
 from backend.models.order import Order, OrderItem
 from backend.models.product import Product
 from backend.order_status import OrderStatus
@@ -126,13 +127,13 @@ def create_order(
         db.flush()
         order_response = OrderResponse.model_validate(new_order)
         db.commit()
-    except IntegrityError:
+    except IntegrityError as error:
         db.rollback()
         # A concurrent request may have committed the same key after our SELECT.
         existing = db.query(Order).filter(Order.idempotency_key == key).one_or_none()
         if existing is not None:
             return _replay_order(existing, order, http_response)
-        logger.exception("Order insert failed without a matching idempotency key")
+        log_failure(logger, "Order insert failed without a matching idempotency key", error)
         raise HTTPException(500, "Could not save the order") from None
     except HTTPException:
         db.rollback()

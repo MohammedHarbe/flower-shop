@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import update
 
 from backend.database import SessionLocal
+from backend.logging_utils import log_failure
 from backend.models.order import Order
 from backend.settings import Settings
 from backend.time_utils import cairo_now
@@ -85,9 +86,9 @@ def send_order_notification(order: dict[str, Any]) -> None:
             refused = smtp.send_message(message, to_addrs=recipients)
             if refused:
                 raise RuntimeError("One or more order notification recipients were refused")
-    except Exception:
+    except Exception as error:
         # Notification errors never undo or hide a committed order.
-        logger.exception("Failed to send order notification email")
+        log_failure(logger, "Failed to send order notification email", error)
         return
 
     try:
@@ -101,5 +102,5 @@ def send_order_notification(order: dict[str, Any]) -> None:
             db.commit()
             if changed.rowcount == 0:
                 logger.warning("Notification sent, but order %s was not marked", order["id"])
-    except Exception:
-        logger.exception("Order email was accepted, but notified_at could not be recorded")
+    except Exception as error:
+        log_failure(logger, "Order email was accepted, but notified_at could not be recorded", error)
