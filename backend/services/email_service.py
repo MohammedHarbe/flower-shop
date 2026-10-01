@@ -5,7 +5,12 @@ from decimal import Decimal
 from email.message import EmailMessage
 from typing import Any
 
+from sqlalchemy import update
+
+from backend.database import SessionLocal
+from backend.models.order import Order
 from backend.settings import Settings
+from backend.time_utils import cairo_now
 
 
 logger = logging.getLogger(__name__)
@@ -77,7 +82,24 @@ def send_order_notification(order: dict[str, Any]) -> None:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
             smtp.starttls(context=ssl.create_default_context())
             smtp.login(settings.smtp_username, settings.smtp_password.get_secret_value())
-            smtp.send_message(message, to_addrs=recipients)
+            refused = smtp.send_message(message, to_addrs=recipients)
+            if refused:
+                raise RuntimeError("One or more order notification recipients were refused")
     except Exception:
         # Notification errors never undo or hide a committed order.
         logger.exception("Failed to send order notification email")
+        return
+
+    try:
+        # The request session is closed by now. Record success in a new session.
+        with SessionLocal() as db:
+            changed = db.execute(
+                update(Order)
+                .where(Order.id == order["id"], Order.notified_at.is_(None))
+                .values(notified_at=cairo_now())
+            )
+            db.commit()
+            if changed.rowcount == 0:
+                logger.warning("Notification sent, but order %s was not marked", order["id"])
+    except Exception:
+        logger.exception("Order email was accepted, but notified_at could not be recorded")

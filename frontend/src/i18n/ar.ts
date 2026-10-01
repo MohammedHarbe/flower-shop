@@ -196,6 +196,12 @@ export const ar: typeof en = {
     address: 'عنوان التوصيل بالكامل',
     date: 'تاريخ التوصيل',
     slot: 'وقت التوصيل المفضل',
+    chooseSlot: 'اختر فترة التوصيل',
+    slotOptions: {
+      morning: '10 ص - 2 م',
+      afternoon: '2 م - 6 م',
+      evening: '6 م - 10 م',
+    },
     slotHint: 'الوقت المطلوب يخضع لتأكيد تون فلاورز.',
     cardMessage: 'رسالة البطاقة',
     senderName: 'اسم المرسل على البطاقة',

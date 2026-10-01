@@ -21,6 +21,7 @@ class RouteSecurityTests(unittest.TestCase):
         protected = (
             ("POST", "/products"),
             ("PATCH", "/products/{product_id}"),
+            ("GET", "/orders"),
             ("GET", "/orders/{order_id}"),
             ("PATCH", "/orders/{order_id}/status"),
         )

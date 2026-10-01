@@ -194,6 +194,12 @@ export const en = {
     address: 'Full delivery address',
     date: 'Delivery date',
     slot: 'Preferred delivery time',
+    chooseSlot: 'Choose a time window',
+    slotOptions: {
+      morning: '10 AM - 2 PM',
+      afternoon: '2 PM - 6 PM',
+      evening: '6 PM - 10 PM',
+    },
     slotHint: 'A preference, subject to confirmation by ToneFlowers.',
     cardMessage: 'Card message',
     senderName: 'Sender name on card',

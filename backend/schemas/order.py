@@ -1,15 +1,18 @@
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, field_validator, model_validator
 
 from backend.delivery_region import DeliveryGovernorate
+from backend.delivery_slot import DeliverySlot
 from backend.order_status import OrderStatus
+from backend.phone import normalize_egyptian_mobile
+from backend.time_utils import cairo_today
 
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
-Phone = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=30)]
 Area = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 Address = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 
@@ -24,18 +27,19 @@ class OrderItem(BaseModel):
 class OrderCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    idempotency_key: UUID
     customer_name: Name
-    customer_phone: Phone
-    customer_email: str | None = Field(default=None, max_length=150)
+    customer_phone: str
+    customer_email: EmailStr | None = Field(default=None, max_length=150)
 
     receiver_name: Name
-    receiver_phone: Phone
+    receiver_phone: str
 
     governorate: DeliveryGovernorate
     delivery_address: Address
     delivery_area: Area
     delivery_date: date
-    delivery_slot: Area
+    delivery_slot: DeliverySlot
 
     card_message: str | None = Field(default=None, max_length=500)
     sender_name_on_card: str | None = Field(default=None, max_length=150)
@@ -43,10 +47,15 @@ class OrderCreate(BaseModel):
 
     items: list[OrderItem] = Field(min_length=1)
 
+    @field_validator("customer_phone", "receiver_phone")
+    @classmethod
+    def normalize_phone(cls, value: str) -> str:
+        return normalize_egyptian_mobile(value)
+
     @field_validator("delivery_date")
     @classmethod
     def delivery_date_not_past(cls, value: date) -> date:
-        if value < date.today():
+        if value < cairo_today():
             raise ValueError("Delivery date cannot be in the past")
         return value
 
@@ -71,6 +80,7 @@ class OrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    idempotency_key: UUID | None
     customer_name: str
     customer_phone: str
     customer_email: str | None
@@ -91,6 +101,7 @@ class OrderResponse(BaseModel):
     status: OrderStatus
     total_price: Decimal
     created_at: datetime
+    notified_at: datetime | None
 
     items: list[OrderItemResponse]
 

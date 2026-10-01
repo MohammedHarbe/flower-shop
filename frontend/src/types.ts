@@ -1,5 +1,6 @@
 export type Language = 'ar' | 'en'
 export type Governorate = 'Cairo' | 'Giza'
+export type DeliverySlot = 'morning' | 'afternoon' | 'evening'
 
 export interface Product {
   id: number
@@ -28,6 +29,7 @@ export interface OrderItemInput {
 }
 
 export interface OrderCreatePayload {
+  idempotency_key: string
   customer_name: string
   customer_phone: string
   customer_email: string | null
@@ -37,7 +39,7 @@ export interface OrderCreatePayload {
   delivery_area: string
   delivery_address: string
   delivery_date: string
-  delivery_slot: string
+  delivery_slot: DeliverySlot
   card_message: string | null
   sender_name_on_card: string | null
   customer_note: string | null
@@ -49,11 +51,14 @@ export interface OrderItemResponse extends OrderItemInput {
   subtotal: string
 }
 
-export interface OrderResponse extends Omit<OrderCreatePayload, 'items'> {
+export interface OrderResponse extends Omit<OrderCreatePayload, 'items' | 'idempotency_key' | 'delivery_slot'> {
   id: number
+  idempotency_key: string | null
+  delivery_slot: string
   status: string
   total_price: string
   created_at: string
+  notified_at: string | null
   items: OrderItemResponse[]
 }
 

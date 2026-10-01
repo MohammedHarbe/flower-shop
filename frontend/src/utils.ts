@@ -43,8 +43,11 @@ export function formatDate(value: string, language: Language): string {
 }
 
 export function todayLocal(): string {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date())
+  const value = (part: string) => parts.find((item) => item.type === part)?.value || ''
+  return `${value('year')}-${value('month')}-${value('day')}`
 }
 
 export function normalizeDigits(value: string): string {
@@ -52,4 +55,12 @@ export function normalizeDigits(value: string): string {
     const code = digit.charCodeAt(0)
     return String(code >= 0x06f0 ? code - 0x06f0 : code - 0x0660)
   })
+}
+
+export function normalizeEgyptianPhone(value: string): string | null {
+  let compact = normalizeDigits(value.trim()).replace(/[\s().-]/g, '')
+  if (compact.startsWith('0020')) compact = `+20${compact.slice(4)}`
+  else if (compact.startsWith('20')) compact = `+${compact}`
+  else if (compact.startsWith('0')) compact = `+20${compact.slice(1)}`
+  return /^\+201[0125][0-9]{8}$/.test(compact) ? compact : null
 }

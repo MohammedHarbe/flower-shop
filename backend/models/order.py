@@ -1,18 +1,21 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, Enum as SAEnum, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Date, Enum as SAEnum, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
 from backend.delivery_region import DeliveryGovernorate
 from backend.order_status import OrderStatus
+from backend.time_utils import CairoDateTime, cairo_now
 
 
 class Order(Base):
     __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    # Nullable for orders created before idempotency keys were required.
+    idempotency_key: Mapped[str | None] = mapped_column(String(36), nullable=True, unique=True, index=True)
 
     customer_name: Mapped[str] = mapped_column(String(150))
     customer_phone: Mapped[str] = mapped_column(String(30))
@@ -35,6 +38,7 @@ class Order(Base):
     )
     delivery_area: Mapped[str] = mapped_column(String(100))
     delivery_date: Mapped[date] = mapped_column(Date)
+    # Historical orders have free-text values; new requests use DeliverySlot.
     delivery_slot: Mapped[str] = mapped_column(String(100))
 
     card_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -52,7 +56,8 @@ class Order(Base):
         ),
         default=OrderStatus.pending,
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(CairoDateTime(), default=cairo_now, nullable=False)
+    notified_at: Mapped[datetime | None] = mapped_column(CairoDateTime(), nullable=True)
 
     items: Mapped[list["OrderItem"]] = relationship(
         back_populates="order", cascade="all, delete-orphan"

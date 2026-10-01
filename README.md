@@ -24,9 +24,11 @@ Swagger UI is at <http://127.0.0.1:8000/docs>.
 
 The database migration command is required before starting a fresh checkout.
 Alembic first adopts the original schema, then adds catalog and governorate
-columns. It does not delete old products or orders. Historical orders have a
-null governorate when it could not be determined; new orders require Cairo or
-Giza. SQLite remains the development default. Set `DATABASE_URL` to a
+columns, then adds order notification and idempotency tracking. It does not
+delete old products or orders. Historical orders have a null governorate or
+idempotency key when those values were not recorded, and keep their original
+free-text delivery slots. New orders require Cairo or Giza and a fixed slot.
+SQLite remains the development default. Set `DATABASE_URL` to a
 `postgresql+psycopg://...` URL when preparing a PostgreSQL deployment.
 
 ## Start the website (second Command Prompt)
@@ -71,16 +73,37 @@ variables are visible in the browser.
 - `GET /products` lists active products; `GET /products/{id}` gets one.
 - `POST /products` and `PATCH /products/{id}` require `X-Admin-Key`.
 - `POST /orders` is public. Send customer, receiver, delivery, and gift details
-  with item `product_id` and `quantity`. Send `governorate` as `Cairo` or `Giza`.
-  Do not send price, total, status, or server-generated IDs.
-- `GET /orders/{id}` and `PATCH /orders/{id}/status` require `X-Admin-Key`.
+  with item `product_id` and `quantity`. Send `governorate` as `Cairo` or `Giza`,
+  `delivery_slot` as `morning`, `afternoon`, or `evening`, and a UUID
+  `idempotency_key`. Repeating the same key returns the saved order without
+  reducing stock or sending another notification. Do not send price, total,
+  status, or server-generated IDs.
+- `GET /orders` (optional `status` and `delivery_date` filters),
+  `GET /orders/{id}`, and `PATCH /orders/{id}/status` require `X-Admin-Key`.
 
 At checkout, the website refreshes product availability and sends IDs and
 quantities. FastAPI validates the order; SQLAlchemy calculates prices, stores
 items, and reduces stock in one transaction. After commit, a background task
 sends the owner email. A mail failure is logged and cannot undo the order.
+The email task uses its own database session and sets `notified_at` only after
+all configured recipients are accepted by SMTP. A null value means successful
+notification has not been recorded; background tasks do not retry automatically.
 The success page uses the `POST /orders` response, so it does not fetch private
 order details through a sequential public ID.
+
+Both customer and receiver mobile numbers are normalized to `+201xxxxxxxx`;
+the optional email address is validated. An order can move from pending to
+confirmed or cancelled, confirmed to preparing or cancelled, preparing to
+out_for_delivery or cancelled, and out_for_delivery to delivered. Delivered
+and cancelled orders are final. Cancellation returns all item quantities to
+stock in the same transaction as the status change, exactly once.
+
+Business dates use `Africa/Cairo` (including Egypt's daylight saving rules).
+New timestamps are timezone-aware in Python and returned as Cairo times.
+SQLite stores UTC as a naive DATETIME because its native DATETIME does not
+retain offsets; the application reattaches UTC and converts to Cairo on read.
+PostgreSQL uses TIMESTAMP WITH TIME ZONE. The migration interprets old naive
+`created_at` values as Cairo wall time before converting them to UTC.
 
 The cart stores only product IDs and quantities in localStorage. Product data
 and displayed prices are refreshed from FastAPI. Filters and sorting currently
