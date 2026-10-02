@@ -2,7 +2,7 @@ import logging
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -13,11 +13,19 @@ from backend.logging_utils import log_failure
 from backend.models.delivery_zone import DeliveryZone
 from backend.models.order import Order, OrderItem
 from backend.models.product import Product
+from backend.rate_limiter import enforce_rate_limit
+from backend.settings import Settings
 from backend.order_status import OrderStatus
 from backend.payment_method import PaymentMethod
 from backend.payment_status import PaymentStatus
 from backend.schemas.delivery_zone import DeliveryZoneCreate, DeliveryZoneResponse, DeliveryZoneUpdate
-from backend.schemas.order import OrderCreate, OrderPaymentStatusUpdate, OrderResponse, OrderStatusUpdate
+from backend.schemas.order import (
+    OrderConfirmationResponse,
+    OrderCreate,
+    OrderPaymentStatusUpdate,
+    OrderResponse,
+    OrderStatusUpdate,
+)
 from backend.services.email_service import send_order_notification
 
 
@@ -125,13 +133,16 @@ def update_delivery_zone(
     return record
 
 
-@router.post("/orders", response_model=OrderResponse, status_code=201)
+@router.post("/orders", response_model=OrderConfirmationResponse, status_code=201)
 def create_order(
     order: OrderCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     http_response: Response = None,
+    request: Request = None,
 ):
+    settings = Settings()
+    enforce_rate_limit(request, name="orders", limit=settings.order_rate_limit_per_minute, window_seconds=60)
     key = str(order.idempotency_key)
     existing = db.query(Order).filter(Order.idempotency_key == key).one_or_none()
     if existing is not None:

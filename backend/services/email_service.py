@@ -16,6 +16,12 @@ from backend.time_utils import cairo_now
 
 logger = logging.getLogger(__name__)
 
+DELIVERY_SLOT_LABELS = {
+    "morning": "10:00 AM - 2:00 PM",
+    "afternoon": "2:00 PM - 6:00 PM",
+    "evening": "6:00 PM - 10:00 PM",
+}
+
 
 def send_order_notification(order: dict[str, Any]) -> None:
     """Notify the shop using detached data from an already committed order."""
@@ -45,6 +51,7 @@ def send_order_notification(order: dict[str, Any]) -> None:
         payment_method = order.get("payment_method", "cash_on_delivery")
         payment_status = order.get("payment_status", "unpaid")
         delivery_zone = order.get("delivery_zone")
+        delivery_slot = str(order.get("delivery_slot", ""))
 
         body = "\n".join(
             [
@@ -70,7 +77,7 @@ def send_order_notification(order: dict[str, Any]) -> None:
                 f"- area: {order['delivery_area']}",
                 f"- full address: {order['delivery_address']}",
                 f"- delivery date: {order['delivery_date']}",
-                f"- delivery slot: {order['delivery_slot']}",
+                f"- delivery slot: {DELIVERY_SLOT_LABELS.get(delivery_slot, delivery_slot or 'To be confirmed')}",
                 f"- delivery zone: {delivery_zone or 'Not selected'}",
                 f"- location: {order.get('delivery_latitude', 'n/a')}, {order.get('delivery_longitude', 'n/a')}",
                 "",

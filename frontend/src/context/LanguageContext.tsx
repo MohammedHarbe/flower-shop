@@ -27,7 +27,6 @@ export function LanguageProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     document.documentElement.lang = language
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr'
-    document.title = language === 'ar' ? 'تون فلاورز | ورد يحكي حكايتك' : 'ToneFlowers | Flowers that tell your story'
     try { localStorage.setItem('toneflowers-language', language) } catch { /* Keep the in-memory choice. */ }
   }, [language])
 

@@ -64,3 +64,19 @@ export function normalizeEgyptianPhone(value: string): string | null {
   else if (compact.startsWith('0')) compact = `+20${compact.slice(1)}`
   return /^\+201[0125][0-9]{8}$/.test(compact) ? compact : null
 }
+
+export function whatsappLink(number: string, fallbackUrl: string, message: string): string {
+  let digits = normalizeDigits(number).replace(/\D/g, '')
+  if (digits.startsWith('00')) digits = digits.slice(2)
+  if (digits.startsWith('0')) digits = `20${digits.slice(1)}`
+  else if (digits && !digits.startsWith('20')) digits = `20${digits}`
+  if (digits) return `https://wa.me/${digits}?text=${encodeURIComponent(message)}`
+  if (!fallbackUrl) return ''
+  try {
+    const url = new URL(fallbackUrl)
+    url.searchParams.set('text', message)
+    return url.toString()
+  } catch {
+    return fallbackUrl
+  }
+}

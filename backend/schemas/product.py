@@ -32,6 +32,7 @@ class ProductCreate(BaseModel):
     description_ar: str | None = Field(default=None, max_length=500)
     price: PositivePrice
     stock: NonnegativeStock
+    active: bool = True
     image_url: str | None = Field(default=None, max_length=500)
     category: ShortTag | None = None
     occasion: ShortTag | None = None

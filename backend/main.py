@@ -12,6 +12,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from backend.database import get_db
 from backend.logging_utils import log_failure
 from backend.payment_method import PaymentMethod
+from backend.routers.admin import router as admin_router
 from backend.routers.orders import router as orders_router
 from backend.routers.products import router as products_router
 from backend.settings import Settings
@@ -67,8 +68,9 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH"],
-    allow_headers=["Content-Type", "X-Admin-Key"],
+    allow_headers=["Content-Type", "X-Admin-Key", "X-Requested-With"],
 )
+app.include_router(admin_router)
 app.include_router(orders_router)
 app.include_router(products_router)
 

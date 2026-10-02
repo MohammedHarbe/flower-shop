@@ -23,6 +23,14 @@ def create_product(
     return new_product
 
 
+@router.get("/admin/products", response_model=list[ProductResponse])
+def list_products_admin(
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_admin_key),
+):
+    return db.query(Product).order_by(Product.id.asc()).all()
+
+
 @router.get("/products", response_model=list[ProductResponse])
 def list_products(db: Session = Depends(get_db)):
     return db.query(Product).filter(Product.active.is_(True)).all()

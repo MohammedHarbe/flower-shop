@@ -1,6 +1,10 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { getPublicConfig } from '../api/orders'
 import { config } from '../config'
 import { useLanguage } from '../context/LanguageContext'
+import type { PublicConfig } from '../types'
+import { whatsappLink } from '../utils'
 
 export function AboutPage() {
   const { t } = useLanguage()
@@ -9,15 +13,24 @@ export function AboutPage() {
 
 export function ContactPage() {
   const { t } = useLanguage()
+  const [publicConfig, setPublicConfig] = useState<PublicConfig | null>(null)
+  useEffect(() => {
+    getPublicConfig().then(setPublicConfig).catch(() => undefined)
+  }, [])
+  const whatsappHref = whatsappLink(
+    publicConfig?.whatsapp_number || '',
+    config.whatsappUrl,
+    t.contact.whatsappMessage,
+  )
   const channels = [
-    { label: t.contact.whatsapp, value: t.contact.whatsappAction, href: config.whatsappUrl },
+    { label: t.contact.whatsapp, value: t.contact.whatsappAction, href: whatsappHref },
     { label: t.contact.phone, value: config.phone, href: config.phone ? `tel:${config.phone}` : '' },
     { label: t.contact.email, value: config.email, href: config.email ? `mailto:${config.email}` : '' },
     { label: t.contact.facebook, value: 'ToneFlowers', href: config.facebookUrl },
     { label: t.contact.instagram, value: t.contact.instagramAction, href: config.instagramUrl },
   ].filter((channel) => channel.href)
 
-  return <div className="page contact-page"><div className="page-banner"><div className="container"><p className="eyebrow">{t.contact.eyebrow}</p><h1>{t.contact.title}</h1><p>{t.contact.copy}</p></div></div><div className="container contact-page-content"><div className="contact-cards">{channels.map((channel) => <a className="contact-card" key={channel.label} href={channel.href} target={channel.href.startsWith('http') ? '_blank' : undefined} rel={channel.href.startsWith('http') ? 'noopener noreferrer' : undefined}><span className="contact-card-main"><span className="contact-card-kind">{channel.label}</span><strong>{channel.value}</strong></span><span className="contact-card-action" aria-hidden="true">↗</span></a>)}</div><div className="contact-side"><span aria-hidden="true">✿</span><h2>{t.contact.serviceArea}</h2>{!config.phone && !config.email && !config.whatsappUrl && <p>{t.contact.noDirect}</p>}</div></div></div>
+  return <div className="page contact-page"><div className="page-banner"><div className="container"><p className="eyebrow">{t.contact.eyebrow}</p><h1>{t.contact.title}</h1><p>{t.contact.copy}</p></div></div><div className="container contact-page-content"><div className="contact-cards">{channels.map((channel) => <a className="contact-card" key={channel.label} href={channel.href} target={channel.href.startsWith('http') ? '_blank' : undefined} rel={channel.href.startsWith('http') ? 'noopener noreferrer' : undefined}><span className="contact-card-main"><span className="contact-card-kind">{channel.label}</span><strong>{channel.value}</strong></span><span className="contact-card-action" aria-hidden="true">↗</span></a>)}</div><div className="contact-side"><span aria-hidden="true">✿</span><h2>{t.contact.serviceArea}</h2>{!config.phone && !config.email && !whatsappHref && <p>{t.contact.noDirect}</p>}</div></div></div>
 }
 
 export function NotFoundPage() {

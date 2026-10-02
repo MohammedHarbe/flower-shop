@@ -1,8 +1,14 @@
+The frontend sets localized page titles and descriptions, uses the existing
+ToneFlowers logo as its favicon, and marks `/admin` as `noindex, nofollow`.
+`frontend/public/robots.txt` disallows crawling `/admin`, but robots directives
+are not an access-control mechanism. No canonical URL or production domain is
+configured until the actual domain is selected.
 # ToneFlowers
 
 Customer flower shop website and FastAPI backend for Cairo and Giza. The website is
 Arabic-first, supports English, and reads products from the API. Orders are priced
-and validated by the backend. There is no payment or customer account system yet.
+and validated by the backend. Customers can choose Vodafone Cash (manual review)
+or Cash on Delivery; there is no online card gateway or customer account system.
 
 ## Start the backend (Windows Command Prompt)
 
@@ -13,16 +19,24 @@ if not exist .venv py -3 -m venv .venv
 python -m pip install -r requirements.txt
 if not exist .env copy .env.example .env
 python -m alembic upgrade head
+python -m backend.seed_catalog
 python -m uvicorn backend.main:app --reload
 ```
 
-Keep the ignored `.env` file private. Set `ADMIN_API_KEY` to a random value of at least 32 characters
-before using admin routes. Set `SMTP_USERNAME` and `SMTP_PASSWORD` to a Gmail
-account and its App Password to enable owner notifications. The local `.env`
-already has the two requested notification recipients; verify them before use.
+Keep the ignored `.env` file private. For local browser admin, set
+`ADMIN_LOGIN_EMAIL`, a `ADMIN_PASSWORD_HASH` generated with
+`backend.admin_auth.hash_password`, and a random `ADMIN_SESSION_SECRET` of at
+least 32 characters. Keep `ADMIN_API_KEY` for trusted maintenance tools. Set
+`SMTP_USERNAME` and `SMTP_PASSWORD` to a Gmail account and its App Password to
+enable owner notifications. The local `.env` already has private business and
+notification values; do not copy them into examples or commit them.
 Swagger UI is at <http://127.0.0.1:8000/docs>.
 
 The database migration command is required before starting a fresh checkout.
+The explicit seed command idempotently activates Cairo and Giza delivery zones
+at 50.00 EGP. In development and staging it also adds up to eight clearly marked
+temporary demo products without replacing existing catalog entries. In production
+it never creates demo products. It does not run automatically at API startup.
 Alembic first adopts the original schema, then adds catalog and governorate
 columns, then adds order notification and idempotency tracking. It does not
 delete old products or orders. Historical orders have a null governorate or
@@ -95,6 +109,8 @@ npm run dev
 
 Open <http://127.0.0.1:5173>. Build the production files with `npm run build`.
 The build checks TypeScript before writing `frontend/dist/`.
+For local cookie-based admin login, keep the frontend URL hostname aligned
+with `VITE_API_URL` (for example, use `127.0.0.1` for both).
 
 ## Configuration
 
@@ -102,14 +118,23 @@ Backend `.env` values are shown in [.env.example](.env.example):
 
 - `DATABASE_URL`: SQLite locally, PostgreSQL URL for production.
 - `APP_ENV`: `development` locally; set `staging` or `production` when deployed.
-  Startup checks require PostgreSQL, a strong admin key, HTTPS origins and mail
-  configuration in those environments. Configured keys shorter than 32 characters
-  are rejected at startup in every environment.
+  Startup checks require PostgreSQL, a strong maintenance key, hashed browser-admin
+  credentials, a session secret, HTTPS origins and mail configuration in those
+  environments. Configured secrets shorter than 32 characters are rejected.
 - `CORS_ORIGINS`: comma-separated explicit frontend origins. Set production
   origins to the deployed site URL; wildcard origins are rejected.
-- `ADMIN_API_KEY`: required for product writes, order status updates, and
-  sensitive order lookup. Send it in `X-Admin-Key`. This is a temporary private
-  admin mechanism, used only over HTTPS; never embed it in the frontend.
+- `ADMIN_API_KEY`: maintenance access for product writes, order status updates,
+  delivery-zone changes, and sensitive order lookup. Send it in `X-Admin-Key`
+  only from a trusted operator tool over HTTPS; never embed it in the frontend.
+- `ADMIN_LOGIN_EMAIL`, `ADMIN_PASSWORD_HASH`, `ADMIN_SESSION_SECRET`:
+  browser-admin credentials. The dashboard at `/admin` uses a signed HttpOnly
+  session cookie; the password is stored only as the supported PBKDF2-SHA256
+  hash. Cookie-authenticated writes require an allowed `Origin` and the
+  `X-Requested-With: ToneFlowersAdmin` header. Production cookies are Secure.
+  Keep the login email, password hash, session secret, and maintenance key in
+  the ignored local `.env` or deployment secret store only.
+- `ADMIN_SESSION_TTL_SECONDS`, `ADMIN_LOGIN_RATE_LIMIT_PER_MINUTE`,
+  `ORDER_RATE_LIMIT_PER_MINUTE`: session lifetime and per-process throttles.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`: Gmail SMTP. The
   password must be an App Password, never a normal account password.
 - `SHOP_NOTIFICATION_EMAILS`: comma-separated owner recipients. Public examples
@@ -132,13 +157,22 @@ variables are visible in the browser.
 - `GET /health` is public: `200 {"status":"ok"}` after a read-only `SELECT 1`;
   a database failure returns `503 {"status":"unavailable"}` without error details.
   It checks connectivity, not migrations, SMTP delivery or the product catalog.
-- `POST /products` and `PATCH /products/{id}` require `X-Admin-Key`.
+- Admin browser routes use the session cookie: `/admin/login`, `/admin/logout`,
+  and `/admin/me`. The `/admin` dashboard manages products, orders, payment
+  review, and delivery fees. Trusted scripts may use `X-Admin-Key` instead.
+- `GET /delivery-zones` is public and lists active backend-priced zones.
+  `GET /admin/products`, product writes, `/delivery-zones/admin`, delivery-zone
+  writes, order details, status changes, and payment-status changes are admin-only.
 - `POST /orders` is public. Send customer, receiver, delivery, and gift details
   with item `product_id` and `quantity`. Send `governorate` as `Cairo` or `Giza`,
   `delivery_slot` as `morning`, `afternoon`, or `evening`, and a UUID
   `idempotency_key`. Repeating the same key returns the saved order without
   reducing stock or sending another notification. Do not send price, total,
   status, or server-generated IDs.
+- The public `POST /orders` response contains only the order ID, status, delivery
+  area/date/slot, payment method/status, and backend-calculated totals. It omits
+  customer/receiver contact information, full address, gift message, notes,
+  coordinates, and idempotency key. Full order details require admin auth.
 - `GET /orders` (optional `status` and `delivery_date` filters),
   `GET /orders/{id}`, and `PATCH /orders/{id}/status` require `X-Admin-Key`.
 
@@ -169,7 +203,19 @@ PostgreSQL uses TIMESTAMP WITH TIME ZONE. The migration interprets old naive
 The cart stores only product IDs and quantities in localStorage. Product data
 and displayed prices are refreshed from FastAPI. Filters and sorting currently
 run in the browser over `GET /products` results; there is no simulated catalog
-or hard-coded product price fallback.
+or hard-coded product price fallback. The Bassiony help panel uses a fixed,
+bilingual FAQ and a public WhatsApp handoff; it makes no AI/API calls.
+
+### Demo catalog and image sources
+
+The seed command creates eight bilingual, clearly marked `DEMO -` products only
+when `APP_ENV` is `development` or `staging`. Their sample prices and descriptions
+are temporary; replace them before accepting real orders. Product image URLs are
+left empty, so the storefront's built-in placeholder is used. No third-party
+demo photos were added because image licensing/provenance could not be verified
+for this catalog. See [frontend/public/images/SOURCES.md](frontend/public/images/SOURCES.md)
+for the asset provenance note. Existing project branding imagery is retained;
+confirm its rights with the shop owner before production publication.
 
 ## Tests
 
@@ -260,6 +306,11 @@ APP_ENV=production
 DATABASE_URL=postgresql+psycopg://toneflowers_app:URL_ENCODED_PASSWORD@DB_HOST:5432/toneflowers
 CORS_ORIGINS=https://toneflowers.example
 ADMIN_API_KEY=REPLACE_WITH_A_GENERATED_RANDOM_KEY
+ADMIN_LOGIN_EMAIL=admin@example.com
+ADMIN_PASSWORD_HASH=pbkdf2_sha256$REPLACE_WITH_32_HEX_SALT$REPLACE_WITH_64_HEX_DIGEST
+ADMIN_SESSION_SECRET=REPLACE_WITH_A_GENERATED_RANDOM_SECRET
+WHATSAPP_NUMBER=PUBLIC_SHOP_WHATSAPP_NUMBER
+VODAFONE_CASH_NUMBER=PUBLIC_VODAFONE_CASH_NUMBER
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USERNAME=sender@example.com
@@ -270,12 +321,22 @@ SHOP_NOTIFICATION_EMAILS=owner-one@example.com,owner-two@example.com
 Use `APP_ENV=staging` for staging; it applies the same checks. These are
 placeholders, not deployable credentials. Generate the admin key locally with
 `python -c "import secrets; print(secrets.token_urlsafe(32))"` and store the result
-privately. Length validation is a minimum, not an entropy check. Rotate the key
-when access changes. Never pass it in a URL or include it in `VITE_` values.
-Protect Swagger/admin access operationally and keep the key with the owner;
-this shared key has no per-user identity or audit trail. It can serve as an
-initial private admin mechanism for this small shop over HTTPS. Separate admin
-authentication is a later task, not part of this deployment preparation.
+privately. Generate a password hash interactively without placing the password
+in shell history:
+
+```powershell
+python -c "import getpass; from backend.admin_auth import hash_password; print(hash_password(getpass.getpass('Admin password: ')))"
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Store the resulting hash and session secret in the platform secret store. Length
+validation is a minimum, not an entropy check. Rotate the maintenance key and
+session secret when access changes. Never pass credentials in a URL or include
+them in `VITE_` values. Keep admin access restricted to HTTPS and a trusted
+operator. The session cookie is HttpOnly, Secure in staging/production, and
+protected against cross-site writes by exact-Origin validation and a custom
+request header. The process-local login/order rate limiter is appropriate only
+for the documented single-worker deployment; it is not shared across workers.
 
 Environment variables override the ignored backend `.env`. `.env.*` files are
 also ignored, except `.env.example`. Existing Git history is not rewritten:
@@ -490,6 +551,18 @@ acceptance followed by a marker-write failure can also leave that value null.
 
 ### Frontend production build and SPA routing
 
+`WHATSAPP_NUMBER` and `VODAFONE_CASH_NUMBER` are returned by `GET /public-config`
+because they are customer-facing payment/contact details. No admin or mail
+credentials are included in that response. Local business values belong in the
+ignored backend `.env`; `.env.example` contains placeholders only.
+
+Product image values stay in `image_url`. The admin form accepts an absolute
+HTTP(S) URL without credentials. There is no local upload endpoint: the current
+repository has no persistent media-storage service, and local container disks
+are not treated as durable production storage. Use intentionally licensed,
+stable image hosting for real products. Demo products use no image URL and rely
+on the existing storefront placeholder; no unverified stock images are added.
+
 The API base is configured in one place, `frontend/src/config.ts`, through
 `VITE_API_URL`. Its localhost fallback is for development; components contain
 no localhost API URLs. Set the real API URL **before** building. Vite substitutes
@@ -505,9 +578,10 @@ VITE_INSTAGRAM_URL=
 VITE_WHATSAPP_URL=
 ```
 
-Leave the existing optional WhatsApp field empty; this task adds no WhatsApp
-integration. Set only intentional public contact details. All `VITE_` values are
-visible to visitors. No database URL, admin key or SMTP credential goes here.
+Set only intentional public contact details. WhatsApp and Vodafone Cash numbers
+are configured on the backend and returned by `/public-config`; keep them out
+of `VITE_` variables. All `VITE_` values are visible to visitors. No database
+URL, admin key, session secret, password hash or SMTP credential goes here.
 
 ```sh
 cd frontend
@@ -527,12 +601,14 @@ deployment target is chosen.
 - [ ] Choose frontend/API hosting and a separate production-like PostgreSQL staging database.
 - [ ] Configure restricted app/migration roles; verify app DML works and DDL is denied.
 - [ ] Configure all real backend variables and `APP_ENV=staging`; generate a fresh strong admin key.
+- [ ] Configure the browser-admin login email, PBKDF2 password hash and session secret; verify login/logout and CSRF rejection.
+- [ ] Run `python -m backend.seed_catalog`; verify active Cairo/Giza zones show 50.00 EGP and remove/replace demo products before real orders.
 - [ ] Configure exact HTTPS CORS origins and build-time `VITE_API_URL`.
 - [ ] Enable HTTPS for frontend/API and verify database TLS/network restrictions.
 - [ ] Verify automatic backups, retention, pre-migration backup and an isolated restore drill.
 - [ ] Apply migrations once with the migrator role; `alembic check` passes.
 - [ ] Start the API with the app role; unauthenticated `GET /health` returns 200.
-- [ ] Verify sensitive order routes reject missing/wrong admin keys.
+- [ ] Verify sensitive order routes reject missing/wrong keys and unauthenticated sessions; confirm browser session access works.
 - [ ] Replace test products with real Arabic/English names, images, prices and stock.
 - [ ] Check direct SPA routes, refreshes and mobile checkout on a real device.
 - [ ] With owner approval, place one TEST ONLY order; verify fields, total, Cairo time and stock.

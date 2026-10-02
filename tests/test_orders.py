@@ -388,6 +388,12 @@ class OrderTests(unittest.TestCase):
             "Nasr City",
             "1 Flower Street",
             "Roses",
+            "10:00 AM - 2:00 PM",
+            "Payment method: cash_on_delivery",
+            "Payment status: unpaid",
+            "Subtotal: 200.00",
+            "Delivery fee: 0.00",
+            "Total: 200.00",
             "100.00",
             "200.00",
         ):

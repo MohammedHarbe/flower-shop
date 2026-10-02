@@ -1,6 +1,24 @@
 export type Language = 'ar' | 'en'
 export type Governorate = 'Cairo' | 'Giza'
 export type DeliverySlot = 'morning' | 'afternoon' | 'evening'
+export type PaymentMethod = 'vodafone_cash' | 'cash_on_delivery'
+export type PaymentStatus = 'awaiting_payment' | 'unpaid' | 'paid'
+
+export interface DeliveryZone {
+  id: number
+  governorate: Governorate
+  name_en: string
+  name_ar: string | null
+  fee: string | number
+  active: boolean
+  sort_order: number
+}
+
+export interface PublicConfig {
+  whatsapp_number: string
+  vodafone_cash_number: string
+  supported_payment_methods: PaymentMethod[]
+}
 
 export interface Product {
   id: number
@@ -40,6 +58,11 @@ export interface OrderCreatePayload {
   delivery_address: string
   delivery_date: string
   delivery_slot: DeliverySlot
+  payment_method: PaymentMethod
+  delivery_zone_id: number | null
+  delivery_latitude: number | null
+  delivery_longitude: number | null
+  google_place_id: string | null
   card_message: string | null
   sender_name_on_card: string | null
   customer_note: string | null
@@ -55,11 +78,28 @@ export interface OrderResponse extends Omit<OrderCreatePayload, 'items' | 'idemp
   id: number
   idempotency_key: string | null
   delivery_slot: string
+  payment_status: PaymentStatus
   status: string
+  subtotal: string
+  delivery_fee: string
   total_price: string
   created_at: string
   notified_at: string | null
   items: OrderItemResponse[]
+}
+
+export interface OrderConfirmation {
+  id: number
+  governorate: Governorate | null
+  delivery_area: string
+  delivery_date: string
+  delivery_slot: string
+  payment_method: PaymentMethod
+  payment_status: PaymentStatus
+  status: string
+  subtotal: string
+  delivery_fee: string
+  total_price: string
 }
 
 export function moneyAmount(value: string | number): number {

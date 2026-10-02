@@ -89,6 +89,22 @@ class OrderItemResponse(BaseModel):
     subtotal: Decimal
 
 
+class OrderConfirmationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    governorate: DeliveryGovernorate | None
+    delivery_area: str
+    delivery_date: date
+    delivery_slot: str
+    payment_method: PaymentMethod
+    payment_status: PaymentStatus
+    status: OrderStatus
+    subtotal: Decimal
+    delivery_fee: Decimal
+    total_price: Decimal
+
+
 class OrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

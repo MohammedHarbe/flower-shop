@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import SecretStr
+from pydantic import EmailStr, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +24,13 @@ class Settings(BaseSettings):
         "http://localhost:5174,http://127.0.0.1:5174"
     )
     admin_api_key: SecretStr = SecretStr("")
+    admin_login_email: EmailStr | str = ""
+    admin_password_hash: str = ""
+    admin_session_secret: SecretStr = SecretStr("")
+    admin_session_cookie_name: str = "toneflowers_admin_session"
+    admin_session_ttl_seconds: int = 8 * 60 * 60
+    admin_login_rate_limit_per_minute: int = 5
+    order_rate_limit_per_minute: int = 30
     whatsapp_number: str = ""
     vodafone_cash_number: str = ""
 
@@ -63,6 +70,25 @@ class Settings(BaseSettings):
         key = self.admin_api_key.get_secret_value()
         if key and (len(key) < 32 or len(key.strip()) != len(key)):
             raise ValueError("ADMIN_API_KEY must contain at least 32 characters without surrounding whitespace")
+        if self.admin_session_secret.get_secret_value() and (
+            len(self.admin_session_secret.get_secret_value()) < 32
+            or len(self.admin_session_secret.get_secret_value().strip()) != len(self.admin_session_secret.get_secret_value())
+        ):
+            raise ValueError("ADMIN_SESSION_SECRET must contain at least 32 characters without surrounding whitespace")
+        if self.admin_password_hash:
+            parts = self.admin_password_hash.split("$")
+            if (
+                len(parts) != 3
+                or parts[0] != "pbkdf2_sha256"
+                or len(parts[1]) != 32
+                or len(parts[2]) != 64
+                or any(character not in "0123456789abcdef" for character in parts[1] + parts[2])
+            ):
+                raise ValueError("ADMIN_PASSWORD_HASH must use the supported PBKDF2-SHA256 format")
+        if self.admin_session_ttl_seconds <= 0:
+            raise ValueError("ADMIN_SESSION_TTL_SECONDS must be positive")
+        if self.admin_login_rate_limit_per_minute <= 0 or self.order_rate_limit_per_minute <= 0:
+            raise ValueError("Admin login and order rate limits must be positive")
         origins = self.allowed_origins
         recipients = self.notification_recipients
         if not 1 <= self.smtp_port <= 65535:
@@ -84,6 +110,8 @@ class Settings(BaseSettings):
             raise ValueError("Staging/production requires a complete PostgreSQL psycopg DATABASE_URL")
         if not key:
             raise ValueError("ADMIN_API_KEY is required in staging/production")
+        if not self.admin_login_email or not self.admin_password_hash or not self.admin_session_secret.get_secret_value():
+            raise ValueError("ADMIN_LOGIN_EMAIL, ADMIN_PASSWORD_HASH, and ADMIN_SESSION_SECRET are required in staging/production")
         if not origins or any(urlsplit(origin).scheme != "https" for origin in origins):
             raise ValueError("Staging/production requires exact HTTPS CORS_ORIGINS")
         if not (self.smtp_host.strip() and self.smtp_username.strip()
