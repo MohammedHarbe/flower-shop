@@ -3,6 +3,8 @@ import { getProducts } from './products'
 import type { Product } from '../types'
 import { useCart } from '../context/CartContext'
 
+const PRODUCTS_REQUEST_TIMEOUT_MS = 8_000
+
 export function useProducts() {
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
@@ -11,13 +13,24 @@ export function useProducts() {
 
   useEffect(() => {
     const controller = new AbortController()
+    let active = true
+    const timeoutId = setTimeout(() => {
+      controller.abort()
+    }, PRODUCTS_REQUEST_TIMEOUT_MS)
     setLoading(true)
     setError(false)
     getProducts(controller.signal)
-      .then(setProducts)
-      .catch(() => { if (!controller.signal.aborted) setError(true) })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
-    return () => controller.abort()
+      .then((result) => { if (active) setProducts(result) })
+      .catch(() => { if (active) setError(true) })
+      .finally(() => {
+        clearTimeout(timeoutId)
+        if (active) setLoading(false)
+      })
+    return () => {
+      active = false
+      clearTimeout(timeoutId)
+      controller.abort()
+    }
   }, [version])
 
   return { products, loading, error, retry: () => setVersion((current) => current + 1) }

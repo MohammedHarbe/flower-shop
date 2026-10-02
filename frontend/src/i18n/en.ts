@@ -149,6 +149,7 @@ export const en = {
     priceLow: 'Price: low to high',
     priceHigh: 'Price: high to low',
     name: 'Name',
+    empty: 'Our flower collection is empty right now. Please check back soon.',
     noResults: 'No flowers match these filters right now.',
     clearFilters: 'Clear filters',
     results: 'products',
