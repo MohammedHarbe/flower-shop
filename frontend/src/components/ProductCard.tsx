@@ -32,16 +32,15 @@ export function ProductImage({ product, className = '' }: { product: Product; cl
 
 export function ProductCard({ product }: { product: Product }) {
   const { language, t } = useLanguage()
-  const { addItem, items } = useCart()
+  const { addItem } = useCart()
   const [added, setAdded] = useState(false)
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const name = productName(product, language)
-  const atCartLimit = product.stock > 0 && (items.find((item) => item.productId === product.id)?.quantity || 0) >= product.stock
 
   useEffect(() => () => { if (feedbackTimer.current) clearTimeout(feedbackTimer.current) }, [])
 
   function add() {
-    if (!product.active || product.stock <= 0 || (items.find((item) => item.productId === product.id)?.quantity || 0) >= product.stock) return
+    if (!product.active) return
     addItem(product, 1)
     setAdded(true)
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current)
@@ -52,9 +51,9 @@ export function ProductCard({ product }: { product: Product }) {
     <article className="product-card">
       <Link to={`/products/${product.id}`} className="product-card-photo"><ProductImage product={product} />{product.best_seller && <span className="card-badge">{t.nav.bestSellers}</span>}</Link>
       <div className="product-card-body">
-        <div className="product-card-meta"><span>{product.category ? categoryLabel(product.category, language) : 'ToneFlowers'}</span><span className={product.stock > 0 ? 'stock-ok' : 'stock-out'}>{product.stock > 0 ? t.common.available : t.common.soldOut}</span></div>
+        <div className="product-card-meta"><span>{product.category ? categoryLabel(product.category, language) : 'ToneFlowers'}</span></div>
         <Link to={`/products/${product.id}`} className="product-card-name">{name}</Link>
-        <div className="product-card-bottom"><strong>{formatMoney(product.price, language)}</strong><button className={`card-add${added ? ' is-added' : ''}`} type="button" onClick={add} disabled={product.stock <= 0 || !product.active || atCartLimit} aria-label={`${product.stock <= 0 ? t.common.soldOut : atCartLimit ? t.product.maxInCart : added ? t.product.added : t.common.addToCart}: ${name}`}>{added ? <>{t.product.addedShort} <span aria-hidden="true">✓</span></> : product.stock <= 0 ? t.common.soldOut : atCartLimit ? t.product.inCart : t.common.addToCart}</button></div>
+        <div className="product-card-bottom"><strong>{formatMoney(product.price, language)}</strong><button className={`card-add${added ? ' is-added' : ''}`} type="button" onClick={add} disabled={!product.active} aria-label={`${product.active ? (added ? t.product.added : t.common.addToCart) : t.common.soldOut}: ${name}`}>{added ? <>{t.product.addedShort} <span aria-hidden="true">✓</span></> : !product.active ? t.common.soldOut : t.common.addToCart}</button></div>
         <Link to={`/products/${product.id}`} className="card-view">{t.common.viewProduct}</Link>
         <span className="sr-only" role="status" aria-live="polite">{added ? t.product.added : ''}</span>
       </div>

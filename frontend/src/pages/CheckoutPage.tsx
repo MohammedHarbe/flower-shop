@@ -133,7 +133,7 @@ export function CheckoutPage() {
       const byId = new Map(currentProducts.map((product) => [product.id, product]))
       if (items.some((item) => {
         const product = byId.get(item.productId)
-        return !product || !product.active || product.stock < item.quantity
+        return !product || !product.active
       })) {
         setMessage(t.checkout.cartChanged)
         return

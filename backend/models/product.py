@@ -15,6 +15,8 @@ class Product(Base):
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     description_ar: Mapped[str | None] = mapped_column(String(500), nullable=True)
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    # Legacy inventory column retained for compatibility; customer availability is
+    # determined by product.active and not by the numeric stock value.
     stock: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)

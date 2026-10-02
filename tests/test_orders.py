@@ -68,7 +68,7 @@ class OrderTests(unittest.TestCase):
             "items": items if items is not None else [{"product_id": 1, "quantity": 2}],
         }
 
-    def test_cairo_and_giza_orders_save_prices_items_and_stock(self):
+    def test_cairo_and_giza_orders_save_prices_items_without_stock_mutation(self):
         for governorate in ("Cairo", "Giza"):
             with self.subTest(governorate=governorate):
                 tasks = BackgroundTasks()
@@ -86,7 +86,7 @@ class OrderTests(unittest.TestCase):
                 self.assertEqual(len(tasks.tasks), 1)
                 self.assertIsInstance(tasks.tasks[0].args[0], dict)
                 self.assertEqual(get_order(response.id, self.db).items[0].quantity, 2)
-        self.assertEqual(self.db.get(Product, 1).stock, 1)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
         self.assertEqual(self.db.query(Order).count(), 2)
 
     def test_validation_rejects_invalid_bodies(self):
@@ -108,9 +108,9 @@ class OrderTests(unittest.TestCase):
             OrderCreate.model_validate(missing_key)
 
     def test_invalid_product_keeps_order_and_stock_unchanged(self):
-        for product_id, expected_status in ((999, 404), (3, 400), (2, 409)):
+        for product_id, expected_status in ((999, 404), (3, 400)):
             with self.subTest(product_id=product_id):
-                quantity = 4 if product_id == 2 else 1
+                quantity = 1
                 body = self.payload(
                     [{"product_id": 1, "quantity": 1}, {"product_id": product_id, "quantity": quantity}]
                 )
@@ -119,6 +119,13 @@ class OrderTests(unittest.TestCase):
                 self.assertEqual(error.exception.status_code, expected_status)
                 self.assertEqual(self.db.query(Order).count(), 0)
                 self.assertEqual(self.db.get(Product, 1).stock, 5)
+
+        body = self.payload([{"product_id": 1, "quantity": 10}, {"product_id": 3, "quantity": 1}])
+        with self.assertRaises(HTTPException) as error:
+            create_order(OrderCreate.model_validate(body), BackgroundTasks(), self.db)
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertEqual(self.db.query(Order).count(), 0)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
 
     def test_status_update_uses_enum_and_returns_order(self):
         created = create_order(
@@ -329,30 +336,30 @@ class OrderTests(unittest.TestCase):
             send_order_notification(tasks.tasks[0].args[0])
 
         self.assertEqual(self.db.query(Order).count(), 1)
-        self.assertEqual(self.db.get(Product, 1).stock, 3)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
         self.assertIsNone(self.db.query(Order).first().notified_at)
 
-    def test_mid_transaction_failure_rolls_back_stock_and_order(self):
+    def test_create_order_does_not_touch_numeric_stock_even_if_db_listener_fires(self):
         updates = 0
 
-        def fail_second_stock_update(conn, cursor, statement, parameters, context, executemany):
+        def fail_if_products_update(conn, cursor, statement, parameters, context, executemany):
             nonlocal updates
             if statement.startswith("UPDATE products"):
                 updates += 1
-                if updates == 2:
-                    raise RuntimeError("simulated database failure")
+                raise RuntimeError("product stock update should not run")
 
-        event.listen(self.engine, "before_cursor_execute", fail_second_stock_update)
+        event.listen(self.engine, "before_cursor_execute", fail_if_products_update)
         try:
             body = self.payload(
                 [{"product_id": 1, "quantity": 1}, {"product_id": 2, "quantity": 1}]
             )
-            with self.assertRaises(RuntimeError):
-                create_order(OrderCreate.model_validate(body), BackgroundTasks(), self.db)
+            created = create_order(OrderCreate.model_validate(body), BackgroundTasks(), self.db)
+            self.assertEqual(created.status, OrderStatus.pending)
+            self.assertEqual(self.db.query(Order).count(), 1)
         finally:
-            event.remove(self.engine, "before_cursor_execute", fail_second_stock_update)
+            event.remove(self.engine, "before_cursor_execute", fail_if_products_update)
 
-        self.assertEqual(self.db.query(Order).count(), 0)
+        self.assertEqual(updates, 0)
         self.assertEqual(self.db.get(Product, 1).stock, 5)
         self.assertEqual(self.db.get(Product, 2).stock, 3)
 
@@ -455,7 +462,7 @@ class OrderTests(unittest.TestCase):
         self.assertIn("notified_at could not be recorded", "\n".join(logs.output))
         self.db.expire_all()
         self.assertIsNone(self.db.get(Order, created.id).notified_at)
-        self.assertEqual(self.db.get(Product, 1).stock, 3)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
 
     def test_idempotency_reuses_order_and_does_not_reduce_stock_twice(self):
         body = self.payload()
@@ -468,7 +475,7 @@ class OrderTests(unittest.TestCase):
         self.assertEqual(replay.id, first.id)
         self.assertEqual(http_response.status_code, 200)
         self.assertEqual(self.db.query(Order).count(), 1)
-        self.assertEqual(self.db.get(Product, 1).stock, 3)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
         self.assertEqual(len(first_tasks.tasks), 1)
         self.assertEqual(len(replay_tasks.tasks), 0)
 
@@ -488,7 +495,7 @@ class OrderTests(unittest.TestCase):
                 self.assertEqual(len(tasks.tasks), 0)
         self.assertEqual(self.db.query(Order).count(), 1)
         self.assertEqual(self.db.get(Order, created.id).delivery_address, body["delivery_address"])
-        self.assertEqual(self.db.get(Product, 1).stock, 3)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
 
     def test_idempotency_accepts_same_items_in_another_order(self):
         body = self.payload([{"product_id": 2, "quantity": 1}, {"product_id": 1, "quantity": 2}])
@@ -498,8 +505,8 @@ class OrderTests(unittest.TestCase):
             BackgroundTasks(), self.db,
         )
         self.assertEqual(replay.id, created.id)
-        self.assertEqual(self.db.get(Product, 1).stock, 3)
-        self.assertEqual(self.db.get(Product, 2).stock, 2)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
+        self.assertEqual(self.db.get(Product, 2).stock, 3)
 
     def test_different_idempotency_keys_create_two_orders(self):
         first = create_order(OrderCreate.model_validate(self.payload()), BackgroundTasks(), self.db)
@@ -507,7 +514,7 @@ class OrderTests(unittest.TestCase):
         self.assertNotEqual(first.id, second.id)
         self.assertNotEqual(first.idempotency_key, second.idempotency_key)
         self.assertEqual(self.db.query(Order).count(), 2)
-        self.assertEqual(self.db.get(Product, 1).stock, 1)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
 
     def test_unique_index_enforces_idempotency_key(self):
         created = create_order(OrderCreate.model_validate(self.payload()), BackgroundTasks(), self.db)
@@ -557,7 +564,7 @@ class OrderTests(unittest.TestCase):
             replay = create_order(OrderCreate.model_validate(body), replay_tasks, self.db)
         self.assertEqual(replay.id, first.id)
         self.assertEqual(self.db.query(Order).count(), 1)
-        self.assertEqual(self.db.get(Product, 1).stock, 3)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
         self.assertEqual(len(replay_tasks.tasks), 0)
 
     def test_unique_key_race_rejects_changed_payload(self):
@@ -587,12 +594,12 @@ class OrderTests(unittest.TestCase):
                 create_order(OrderCreate.model_validate(changed), tasks, self.db)
         self.assertEqual(error.exception.status_code, 409)
         self.assertEqual(self.db.query(Order).count(), 1)
-        self.assertEqual(self.db.get(Product, 1).stock, 3)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
         self.assertEqual(len(tasks.tasks), 0)
 
     def test_cancellation_restores_stock_exactly_once(self):
         created = create_order(OrderCreate.model_validate(self.payload()), BackgroundTasks(), self.db)
-        self.assertEqual(self.db.get(Product, 1).stock, 3)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
         cancelled = update_order_status(created.id, OrderStatusUpdate(status="cancelled"), self.db)
         self.assertEqual(cancelled.status, OrderStatus.cancelled)
         self.assertEqual(self.db.get(Product, 1).stock, 5)
@@ -612,7 +619,7 @@ class OrderTests(unittest.TestCase):
                         OrderCreate.model_validate(self.payload()), BackgroundTasks(), db,
                     )
                     order_id = created.id
-                    self.assertEqual(db.get(Product, 1).stock, 8)
+                    self.assertEqual(db.get(Product, 1).stock, 10)
                     confirmed = update_order_status(order_id, OrderStatusUpdate(status="confirmed"), db)
                     self.assertEqual(confirmed.status, OrderStatus.confirmed)
 
@@ -659,7 +666,7 @@ class OrderTests(unittest.TestCase):
             finally:
                 engine.dispose()
 
-    def test_cancellation_failure_rolls_back_status_and_all_stock(self):
+    def test_cancellation_does_not_touch_stock_even_if_inventory_updates_fire(self):
         body = self.payload([
             {"product_id": 2, "quantity": 1},
             {"product_id": 1, "quantity": 1},
@@ -667,23 +674,23 @@ class OrderTests(unittest.TestCase):
         created = create_order(OrderCreate.model_validate(body), BackgroundTasks(), self.db)
         updates = 0
 
-        def fail_second_restore(conn, cursor, statement, parameters, context, executemany):
+        def fail_if_products_update(conn, cursor, statement, parameters, context, executemany):
             nonlocal updates
             if statement.startswith("UPDATE products"):
                 updates += 1
-                if updates == 2:
-                    raise RuntimeError("simulated restore failure")
+                raise RuntimeError("product stock updates should not run during cancellation")
 
-        event.listen(self.engine, "before_cursor_execute", fail_second_restore)
+        event.listen(self.engine, "before_cursor_execute", fail_if_products_update)
         try:
-            with self.assertRaises(RuntimeError):
-                update_order_status(created.id, OrderStatusUpdate(status="cancelled"), self.db)
+            cancelled = update_order_status(created.id, OrderStatusUpdate(status="cancelled"), self.db)
+            self.assertEqual(cancelled.status, OrderStatus.cancelled)
         finally:
-            event.remove(self.engine, "before_cursor_execute", fail_second_restore)
+            event.remove(self.engine, "before_cursor_execute", fail_if_products_update)
         self.db.expire_all()
-        self.assertEqual(self.db.get(Order, created.id).status, OrderStatus.pending)
-        self.assertEqual(self.db.get(Product, 1).stock, 4)
-        self.assertEqual(self.db.get(Product, 2).stock, 2)
+        self.assertEqual(self.db.get(Order, created.id).status, OrderStatus.cancelled)
+        self.assertEqual(updates, 0)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
+        self.assertEqual(self.db.get(Product, 2).stock, 3)
 
     def test_allowed_status_chain_and_invalid_transitions(self):
         created = create_order(OrderCreate.model_validate(self.payload()), BackgroundTasks(), self.db)
@@ -762,10 +769,10 @@ class OrderTests(unittest.TestCase):
             created = create_order(OrderCreate.model_validate(body), BackgroundTasks(), self.db)
         finally:
             event.remove(self.engine, "before_cursor_execute", record_update)
-        self.assertEqual(updated_ids, [1, 2])
+        self.assertEqual(updated_ids, [])
         self.assertEqual([item.product_id for item in created.items], [1, 2])
-        self.assertEqual(self.db.get(Product, 1).stock, 4)
-        self.assertEqual(self.db.get(Product, 2).stock, 2)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
+        self.assertEqual(self.db.get(Product, 2).stock, 3)
 
 
 if __name__ == "__main__":

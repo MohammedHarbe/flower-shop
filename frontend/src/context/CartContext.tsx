@@ -51,10 +51,10 @@ export function CartProvider({ children }: PropsWithChildren) {
       items,
       count: items.reduce((sum, item) => sum + item.quantity, 0),
       addItem(product, quantity) {
-        if (!product.active || product.stock <= 0 || quantity <= 0) return
+        if (!product.active || quantity <= 0) return
         setItems((current) => {
           const existing = current.find((item) => item.productId === product.id)
-          const nextQuantity = Math.min(product.stock, (existing?.quantity || 0) + quantityInteger(quantity))
+          const nextQuantity = (existing?.quantity || 0) + quantityInteger(quantity)
           if (existing) {
             return current.map((item) =>
               item.productId === product.id ? { ...item, quantity: nextQuantity } : item,

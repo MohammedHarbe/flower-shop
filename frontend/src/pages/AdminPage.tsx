@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
+import { useLocation } from 'react-router-dom'
 import {
   adminDeliveryZones,
   adminLogin,
@@ -108,6 +109,7 @@ function newDraft(product?: Product): ProductDraft {
 
 export function AdminPage() {
   const { language } = useLanguage()
+  const location = useLocation()
   const text = copy[language]
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -169,6 +171,20 @@ export function AdminPage() {
   useEffect(() => {
     if (authenticated) void loadDashboard()
   }, [authenticated])
+
+  useEffect(() => {
+    if (location.pathname.startsWith('/admin/products')) {
+      setTab('products')
+      return
+    }
+    if (location.pathname.startsWith('/admin/orders')) {
+      setTab('orders')
+      return
+    }
+    if (location.pathname.startsWith('/admin/settings')) {
+      setTab('delivery')
+    }
+  }, [location.pathname])
 
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()

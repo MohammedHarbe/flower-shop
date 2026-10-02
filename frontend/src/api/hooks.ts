@@ -41,8 +41,6 @@ export function useCartProducts() {
   const state = useProducts()
   const byId = new Map(state.products.map((product) => [product.id, product]))
   const lines = items.map((item) => ({ ...item, product: byId.get(item.productId) }))
-  const hasUnavailable = lines.some(
-    (line) => !line.product || !line.product.active || line.product.stock < line.quantity,
-  )
+  const hasUnavailable = lines.some((line) => !line.product || !line.product.active)
   return { ...state, lines, hasUnavailable }
 }

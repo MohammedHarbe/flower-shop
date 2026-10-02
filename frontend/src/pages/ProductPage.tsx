@@ -12,7 +12,7 @@ import { categoryLabel, formatMoney, productDescription, productName } from '../
 export function ProductPage() {
   const { id } = useParams()
   const { language, t } = useLanguage()
-  const { addItem, items } = useCart()
+  const { addItem } = useCart()
   const [product, setProduct] = useState<Product | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<'not_found' | 'network' | null>(null)
@@ -44,7 +44,7 @@ export function ProductPage() {
   const related = product ? relatedState.products.filter((item) => item.id !== product.id && ((product.category && item.category === product.category) || (product.occasion && item.occasion === product.occasion))).slice(0, 4) : []
 
   function add() {
-    if (!product || !product.active || product.stock <= 0 || (items.find((item) => item.productId === product.id)?.quantity || 0) >= product.stock) return
+    if (!product || !product.active) return
     addItem(product, quantity)
     setAdded(true)
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current)
@@ -57,7 +57,6 @@ export function ProductPage() {
 
   const name = productName(product, language)
   const description = productDescription(product, language)
-  const atCartLimit = product.stock > 0 && (items.find((item) => item.productId === product.id)?.quantity || 0) >= product.stock
   return (
     <div className="page product-detail-page container">
       <div className="breadcrumbs">
@@ -70,18 +69,15 @@ export function ProductPage() {
           <p className="eyebrow">{product.category ? categoryLabel(product.category, language) : 'TONEFLOWERS'}</p>
           <h1>{name}</h1>
           <p className="detail-price">{formatMoney(product.price, language)}</p>
-          <p className={product.stock > 0 ? 'availability stock-ok' : 'availability stock-out'}>
-            {product.stock > 0 ? t.product.availableCount.replace('{count}', String(product.stock)) : t.common.soldOut}
-          </p>
           <div className="detail-purchase">
             <label htmlFor="product-quantity">{t.common.quantity}</label>
             <div className="quantity-control">
               <button type="button" disabled={quantity <= 1} onClick={() => setQuantity((value) => value - 1)} aria-label={t.common.decrease}>−</button>
-              <input id="product-quantity" type="number" min="1" step="1" max={product.stock} value={quantity} disabled={product.stock <= 0} onChange={(event) => setQuantity(Math.max(1, Math.min(product.stock, Math.trunc(Number(event.target.value) || 1))))} />
-              <button type="button" disabled={quantity >= product.stock} onClick={() => setQuantity((value) => value + 1)} aria-label={t.common.increase}>+</button>
+              <input id="product-quantity" type="number" min="1" step="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, Math.trunc(Number(event.target.value) || 1)))} />
+              <button type="button" onClick={() => setQuantity((value) => value + 1)} aria-label={t.common.increase}>+</button>
             </div>
-            <button className={`button button-primary detail-add${added ? ' is-added' : ''}`} type="button" disabled={product.stock <= 0 || !product.active || atCartLimit} onClick={add}>
-              {added ? <>{t.product.addedShort} <span aria-hidden="true">✓</span></> : product.stock <= 0 ? t.common.soldOut : atCartLimit ? t.product.maxInCart : t.common.addToCart}
+            <button className={`button button-primary detail-add${added ? ' is-added' : ''}`} type="button" disabled={!product.active} onClick={add}>
+              {added ? <>{t.product.addedShort} <span aria-hidden="true">✓</span></> : !product.active ? t.common.soldOut : t.common.addToCart}
             </button>
             <span role="status" aria-live="polite" className="added-message">{added ? t.product.added : ''}</span>
           </div>

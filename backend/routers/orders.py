@@ -159,8 +159,6 @@ def create_order(
                 raise HTTPException(404, f"Product {item.product_id} not found")
             if not product.active:
                 raise HTTPException(400, f"Product {item.product_id} is inactive")
-            if product.stock < item.quantity:
-                raise HTTPException(409, f"Not enough stock for {product.name}")
 
             unit_price = Decimal(product.price)
             item_subtotal = unit_price * item.quantity
@@ -208,17 +206,6 @@ def create_order(
                     subtotal=item_subtotal,
                 )
             )
-            result = db.execute(
-                update(Product)
-                .where(
-                    Product.id == product.id,
-                    Product.active.is_(True),
-                    Product.stock >= quantity,
-                )
-                .values(stock=Product.stock - quantity)
-            )
-            if result.rowcount != 1:
-                raise HTTPException(409, f"Product {product.id} is unavailable or out of stock")
 
         db.flush()
         order_response = OrderResponse.model_validate(new_order)
@@ -317,19 +304,6 @@ def update_order_status(
             raise HTTPException(409, f"Cannot change order status from {current_order.status.value} to {target.value}")
 
         order = db.get(Order, order_id)
-        items = (
-            db.query(OrderItem).filter(OrderItem.order_id == order_id).order_by(OrderItem.product_id).all()
-            if target == OrderStatus.cancelled else []
-        )
-        for item in items:
-            restored = db.execute(
-                update(Product)
-                .where(Product.id == item.product_id)
-                .values(stock=Product.stock + item.quantity)
-            )
-            if restored.rowcount != 1:
-                raise HTTPException(409, f"Product {item.product_id} is missing; cancellation was rolled back")
-
         db.flush()
         db.refresh(order)
         response = OrderResponse.model_validate(order)
