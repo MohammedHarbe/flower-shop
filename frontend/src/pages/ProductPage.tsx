@@ -7,7 +7,7 @@ import { ProductCard, ProductImage, ProductSkeleton } from '../components/Produc
 import { useCart } from '../context/CartContext'
 import { useLanguage } from '../context/LanguageContext'
 import type { Product } from '../types'
-import { categoryLabel, formatMoney, productDescription, productName } from '../utils'
+import { categoryLabel, formatMoney, isDemoProduct, productDescription, productName } from '../utils'
 
 export function ProductPage() {
   const { id } = useParams()
@@ -23,6 +23,14 @@ export function ProductPage() {
   const relatedState = useProducts()
 
   useEffect(() => () => { if (feedbackTimer.current) clearTimeout(feedbackTimer.current) }, [])
+
+  useEffect(() => {
+    if (!product) return
+    const name = productName(product, language)
+    document.title = `${name} | ToneFlowers`
+    const descriptionMeta = document.querySelector<HTMLMetaElement>('meta[name="description"]')
+    if (descriptionMeta) descriptionMeta.content = productDescription(product, language) || `${name} from ToneFlowers, delivered in Cairo and Giza.`
+  }, [product, language])
 
   useEffect(() => {
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current)
@@ -68,7 +76,7 @@ export function ProductPage() {
         <div className="detail-info">
           <p className="eyebrow">{product.category ? categoryLabel(product.category, language) : 'TONEFLOWERS'}</p>
           <h1>{name}</h1>
-          <p className="detail-price">{formatMoney(product.price, language)}</p>
+          <p className="detail-price">{isDemoProduct(product) && <small className="demo-price-label">{t.common.demoPrice}</small>}{formatMoney(product.price, language)}</p>
           <div className="detail-purchase">
             <label htmlFor="product-quantity">{t.common.quantity}</label>
             <div className="quantity-control">

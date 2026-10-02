@@ -20,6 +20,9 @@ export function occasionLabel(value: string, language: Language): string {
 export function productName(product: Product, language: Language): string {
   return language === 'ar' && product.name_ar?.trim() ? product.name_ar : product.name
 }
+export function isDemoProduct(product: Product): boolean {
+  return product.name.startsWith('DEMO - ')
+}
 
 export function productDescription(product: Product, language: Language): string {
   return language === 'ar' && product.description_ar?.trim()

@@ -20,4 +20,5 @@ alembic>=1.18,<2
 psycopg[binary]>=3.2,<4
 email-validator>=2,<3
 itsdangerous>=2.2,<3
+Pillow>=11,<13
 tzdata>=2025.2

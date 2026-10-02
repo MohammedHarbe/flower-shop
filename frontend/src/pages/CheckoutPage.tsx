@@ -10,7 +10,7 @@ import { useCart } from '../context/CartContext'
 import { useLanguage } from '../context/LanguageContext'
 import type { DeliverySlot, DeliveryZone, Governorate, OrderCreatePayload, PaymentMethod, PublicConfig } from '../types'
 import { moneyAmount } from '../types'
-import { formatMoney, normalizeEgyptianPhone, productName, todayLocal } from '../utils'
+import { formatMoney, isDemoProduct, normalizeEgyptianPhone, productName, todayLocal } from '../utils'
 
 type Fields = {
   customer_name: string
@@ -79,6 +79,7 @@ export function CheckoutPage() {
   const subtotal = lines.reduce((sum, line) => sum + (line.product ? moneyAmount(line.product.price) * line.quantity : 0), 0)
   const deliveryFee = selectedZone ? moneyAmount(selectedZone.fee) : 0
   const total = selectedZone ? subtotal + deliveryFee : null
+  const hasDemoProducts = lines.some((line) => line.product && isDemoProduct(line.product))
 
   useEffect(() => {
     let active = true
@@ -158,9 +159,6 @@ export function CheckoutPage() {
         delivery_slot: fields.delivery_slot,
         payment_method: paymentMethod,
         delivery_zone_id: selectedZone.id,
-        delivery_latitude: null,
-        delivery_longitude: null,
-        google_place_id: null,
         card_message: fields.card_message.trim() || null,
         sender_name_on_card: fields.sender_name_on_card.trim() || null,
         customer_note: fields.customer_note.trim() || null,
@@ -170,7 +168,7 @@ export function CheckoutPage() {
       try { sessionStorage.removeItem(CHECKOUT_KEY) } catch { /* Storage may be unavailable. */ }
       idempotencyRef.current = null
       clearCart()
-      navigate(`/order-success/${order.id}`, { replace: true, state: { order, publicConfig } })
+      navigate(`/order-success/${order.id}`, { replace: true, state: { order, publicConfig, demoOrder: hasDemoProducts } })
     } catch (caught) {
       const kind = caught instanceof ApiError ? caught.kind : 'server'
       if (selectedZone && caught instanceof ApiError && (kind === 'not_found' || kind === 'invalid')) {
@@ -280,6 +278,7 @@ export function CheckoutPage() {
             <div className="summary-row"><span>{t.checkout.deliveryFee}</span><strong>{selectedZone ? formatMoney(deliveryFee, language) : '—'}</strong></div>
             <div className="summary-row summary-total"><span>{t.checkout.finalTotal}</span><strong>{total === null ? '—' : formatMoney(total, language)}</strong></div>
             <p className="summary-note">{t.checkout.backendPricing}</p>
+                        {hasDemoProducts && <p className="demo-price-notice" role="note">{t.common.demoCatalogNotice}</p>}
             {hasUnavailable && <p className="inline-warning">{t.checkout.cartChanged}</p>}
             {message && <p className="form-error" role="alert">{message}</p>}
             <button className="button button-primary full-width" type="submit" disabled={submitting || hasUnavailable || zonesLoading || zonesUnavailable || !selectedZone}>{submitting ? t.checkout.submitting : t.checkout.submit}</button>

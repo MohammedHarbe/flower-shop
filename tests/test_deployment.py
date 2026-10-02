@@ -23,7 +23,7 @@ from backend.logging_utils import log_failure
 from backend.main import app, lifespan
 from backend.models.delivery_zone import DeliveryZone
 from backend.models.product import Product
-from backend.seed_catalog import seed_catalog
+from backend.seed_catalog import remove_demo_products, seed_catalog, seed_demo_products
 from backend.routers.admin import AdminLoginRequest, admin_login
 from backend.services.email_service import send_order_notification
 from backend.settings import Settings
@@ -91,6 +91,22 @@ class DeploymentSettingsTests(unittest.TestCase):
             with self.subTest(origin=origin), self.assertRaises(ValueError):
                 self.settings(cors_origins=origin).allowed_origins
 
+    def test_media_upload_modes_and_base_url_validation(self):
+        development = Settings(_env_file=None, app_env="development")
+        staging = Settings(_env_file=None, app_env="staging")
+        persistent_staging = Settings(_env_file=None, app_env="staging", media_persistent_storage=True)
+        self.assertTrue(development.media_uploads_enabled)
+        self.assertFalse(staging.media_uploads_enabled)
+        self.assertTrue(persistent_staging.media_uploads_enabled)
+        self.assertEqual(Settings(_env_file=None, media_base_url="https://images.example").media_base_url,
+                         "https://images.example/media")
+        cdn_path = Settings(_env_file=None, media_base_url="https://images.example/assets")
+        self.assertEqual(cdn_path.media_route_path, "/assets")
+        for value in ("/", "/admin", "/products", "/../media", "/media?x=1", "//evil.example/media",
+                  "https://images.example:bad/media", "https://images.example/admin"):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                Settings(_env_file=None, media_base_url=value)
+
     def test_development_allows_sqlite_and_local_origins_but_rejects_short_key(self):
         settings = self.settings(app_env="development", database_url="sqlite:///test.db",
                                  cors_origins="http://localhost:5173,http://127.0.0.1:5173",
@@ -136,15 +152,23 @@ class CatalogSeedTests(unittest.TestCase):
                 ])
                 self.assertEqual(db.query(Product).count(), 0)
 
-                seed_catalog(db, app_env="staging")
+                seed_demo_products(db, app_env="staging")
                 db.commit()
                 self.assertEqual(db.query(DeliveryZone).count(), 2)
                 self.assertEqual(db.query(Product).count(), 8)
                 self.assertTrue(all(product.name.startswith("DEMO - ") for product in db.query(Product).all()))
 
-                seed_catalog(db, app_env="development")
+                seed_demo_products(db, app_env="development")
                 db.commit()
                 self.assertEqual(db.query(Product).count(), 8)
+                with self.assertRaises(ValueError):
+                    seed_demo_products(db, app_env="production")
+
+                db.add(Product(name="DEMO - Owner Product", price=Decimal("20.00"), stock=0, active=True))
+                db.commit()
+                self.assertEqual(remove_demo_products(db), 8)
+                db.commit()
+                self.assertEqual([product.name for product in db.query(Product).all()], ["DEMO - Owner Product"])
             with order_api(engine) as (base, _):
                 status, public_zones = request_json(base, "/delivery-zones")
                 self.assertEqual(status, 200)
@@ -157,6 +181,26 @@ class CatalogSeedTests(unittest.TestCase):
                 })
                 self.assertNotIn("admin_api_key", public_config)
                 self.assertNotIn("admin_session_secret", public_config)
+
+    def test_demo_cleanup_refuses_to_remove_products_linked_to_orders(self):
+        from backend.models.order import Order, OrderItem
+
+        with isolated_database() as engine:
+            with Session(engine) as db:
+                seed_demo_products(db, app_env="development")
+                db.flush()
+                product = db.query(Product).filter(Product.name == "DEMO - Red Rose Bouquet").one()
+                order = Order(
+                    customer_name="Test", customer_phone="+201012345678", receiver_name="Test",
+                    receiver_phone="+201012345679", delivery_address="Test", delivery_area="Test",
+                    delivery_date=cairo_today(), delivery_slot="morning", total_price=Decimal("1.00"),
+                )
+                order.items.append(OrderItem(product_id=product.id, quantity=1, unit_price=Decimal("1.00"), subtotal=Decimal("1.00")))
+                db.add(order)
+                db.commit()
+                with self.assertRaisesRegex(ValueError, "referenced by orders"):
+                    remove_demo_products(db)
+                self.assertEqual(db.query(Product).count(), 8)
 
 
 class AdminSessionTests(unittest.TestCase):
@@ -227,7 +271,7 @@ class DeploymentHttpTests(unittest.TestCase):
                 db.add(Product(name="Test Roses", price=Decimal("100.00"), stock=2, active=True))
                 db.commit()
             with order_api(engine) as (base, _):
-                status, body = request_json(base, "/orders", {
+                payload = {
                     "idempotency_key": str(uuid4()),
                     "customer_name": "Private Customer",
                     "customer_phone": "01012345678",
@@ -242,15 +286,20 @@ class DeploymentHttpTests(unittest.TestCase):
                     "card_message": "Private card message",
                     "customer_note": "Private customer note",
                     "items": [{"product_id": 1, "quantity": 1}],
-                })
+                }
+                status, body = request_json(base, "/orders", payload)
+                replay_status, replay_body = request_json(base, "/orders", payload)
         self.assertEqual(status, 201)
+        self.assertEqual(replay_status, 200)
         self.assertEqual(body["total_price"], "100.00")
+        self.assertEqual(replay_body, body)
         for field in (
             "customer_name", "customer_phone", "customer_email", "receiver_name",
             "receiver_phone", "delivery_address", "card_message", "customer_note",
             "idempotency_key", "delivery_latitude", "delivery_longitude",
         ):
             self.assertNotIn(field, body)
+            self.assertNotIn(field, replay_body)
 
     def test_health_is_public_and_checks_database(self):
         with isolated_database() as engine, order_api(engine) as (base, notification):

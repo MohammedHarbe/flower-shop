@@ -9,11 +9,13 @@ import {
   adminOrders,
   adminProducts,
   saveProduct,
+  uploadProductImage,
   updateDeliveryZone,
   updateOrderStatus,
   updatePaymentStatus,
 } from '../api/admin'
 import { ApiError } from '../api/client'
+import { ProductImage } from '../components/ProductCard'
 import { useLanguage } from '../context/LanguageContext'
 import type { DeliveryZone, OrderResponse, Product } from '../types'
 import { formatDate, formatMoney } from '../utils'
@@ -26,18 +28,18 @@ type ProductDraft = {
   description: string
   description_ar: string
   price: string
-  stock: string
   category: string
   occasion: string
   image_url: string
+  imageFile: File | null
   active: boolean
   featured: boolean
   best_seller: boolean
 }
 
 const emptyProduct: ProductDraft = {
-  name: '', name_ar: '', description: '', description_ar: '', price: '', stock: '0',
-  category: '', occasion: '', image_url: '', active: true, featured: false, best_seller: false,
+  name: '', name_ar: '', description: '', description_ar: '', price: '',
+  category: '', occasion: '', image_url: '', imageFile: null, active: true, featured: false, best_seller: false,
 }
 
 const copy = {
@@ -45,8 +47,12 @@ const copy = {
     title: 'ToneFlowers operations', login: 'Admin sign in', email: 'Email', password: 'Password', signIn: 'Sign in',
     products: 'Products', orders: 'Orders', delivery: 'Delivery fees', signOut: 'Sign out', add: 'Add product',
     edit: 'Edit', save: 'Save changes', cancel: 'Cancel', name: 'Name (English)', nameAr: 'Name (Arabic)',
-    description: 'Description (English)', descriptionAr: 'Description (Arabic)', price: 'Price (EGP)', stock: 'Stock',
-    category: 'Category', occasion: 'Occasion', image: 'Image URL', active: 'Active', featured: 'Featured', bestSeller: 'Best seller',
+    description: 'Description (English)', descriptionAr: 'Description (Arabic)', price: 'Price (EGP)',
+    category: 'Category', occasion: 'Occasion', image: 'Image URL', upload: 'Upload image', preview: 'Preview', removeImage: 'Remove image',
+    imageUploadError: 'The image could not be uploaded. Use a JPEG, PNG, or WebP image under 5 MB.',
+    uploadDisabled: 'Uploads need durable media storage. Use an image URL or configure persistent storage.',
+    active: 'Active', featured: 'Featured', bestSeller: 'Best seller', pendingConfirmation: 'Awaiting availability confirmation',
+    refundWarning: 'This order is paid. Cancelling it requires a manual refund outside the system.',
     productSaved: 'Product saved.', noProducts: 'No products yet.', order: 'Order', customer: 'Customer', receiver: 'Receiver',
     address: 'Delivery address', items: 'Items', subtotal: 'Subtotal', fee: 'Delivery fee', total: 'Total',
     status: 'Order status', payment: 'Payment status', paymentMethod: 'Payment method', date: 'Delivery date', slot: 'Delivery slot',
@@ -55,7 +61,7 @@ const copy = {
     invalidLogin: 'Email or password is incorrect.', genericError: 'The request could not be completed.', sessionExpired: 'Your session expired. Sign in again.',
     loginIntro: 'Private operations access', productsIntro: 'Catalog and availability', ordersIntro: 'Fulfillment and payment review',
     deliveryIntro: 'Backend-authoritative fees', noImage: 'No image', refresh: 'Refresh', giftMessage: 'Card message', sender: 'Sender', notes: 'Customer note',
-    statuses: { pending: 'Pending', confirmed: 'Confirmed', preparing: 'Preparing', out_for_delivery: 'Out for delivery', delivered: 'Delivered', cancelled: 'Cancelled' },
+    statuses: { pending: 'Awaiting availability confirmation', confirmed: 'Confirmed', preparing: 'Preparing', out_for_delivery: 'Out for delivery', delivered: 'Delivered', cancelled: 'Cancelled' },
     payments: { awaiting_payment: 'Awaiting review', unpaid: 'Unpaid', paid: 'Paid' },
     methods: { vodafone_cash: 'Vodafone Cash', cash_on_delivery: 'Cash on Delivery' },
   },
@@ -63,8 +69,12 @@ const copy = {
     title: 'إدارة تون فلاورز', login: 'دخول المسؤول', email: 'البريد الإلكتروني', password: 'كلمة المرور', signIn: 'تسجيل الدخول',
     products: 'المنتجات', orders: 'الطلبات', delivery: 'رسوم التوصيل', signOut: 'تسجيل الخروج', add: 'إضافة منتج',
     edit: 'تعديل', save: 'حفظ التغييرات', cancel: 'إلغاء', name: 'الاسم بالإنجليزية', nameAr: 'الاسم بالعربية',
-    description: 'الوصف بالإنجليزية', descriptionAr: 'الوصف بالعربية', price: 'السعر (ج.م)', stock: 'المخزون',
-    category: 'التصنيف', occasion: 'المناسبة', image: 'رابط الصورة', active: 'متاح', featured: 'مميز', bestSeller: 'الأكثر مبيعًا',
+    description: 'الوصف بالإنجليزية', descriptionAr: 'الوصف بالعربية', price: 'السعر (ج.م)',
+    category: 'التصنيف', occasion: 'المناسبة', image: 'رابط الصورة', upload: 'رفع صورة', preview: 'معاينة', removeImage: 'إزالة الصورة',
+    imageUploadError: 'تعذر رفع الصورة. استخدم صورة JPEG أو PNG أو WebP بحجم أقل من ٥ ميجابايت.',
+    uploadDisabled: 'يتطلب رفع الصور مساحة تخزين دائمة. استخدم رابط صورة أو فعّل التخزين الدائم.',
+    active: 'متاح', featured: 'مميز', bestSeller: 'الأكثر مبيعًا', pendingConfirmation: 'بانتظار تأكيد توفر الزهور',
+    refundWarning: 'تم دفع هذا الطلب. يتطلب إلغاؤه رد المبلغ يدويًا خارج النظام.',
     productSaved: 'تم حفظ المنتج.', noProducts: 'لا توجد منتجات بعد.', order: 'الطلب', customer: 'العميل', receiver: 'المستلم',
     address: 'عنوان التوصيل', items: 'المنتجات', subtotal: 'المجموع الفرعي', fee: 'رسوم التوصيل', total: 'الإجمالي',
     status: 'حالة الطلب', payment: 'حالة الدفع', paymentMethod: 'طريقة الدفع', date: 'تاريخ التوصيل', slot: 'فترة التوصيل',
@@ -73,7 +83,7 @@ const copy = {
     invalidLogin: 'البريد الإلكتروني أو كلمة المرور غير صحيحة.', genericError: 'تعذر إكمال الطلب.', sessionExpired: 'انتهت الجلسة. سجل الدخول مجددًا.',
     loginIntro: 'دخول خاص بالإدارة', productsIntro: 'الكتالوج والتوفر', ordersIntro: 'تجهيز الطلبات ومراجعة الدفع',
     deliveryIntro: 'الرسوم المعتمدة من الخادم', noImage: 'لا توجد صورة', refresh: 'تحديث', giftMessage: 'رسالة البطاقة', sender: 'المرسل', notes: 'ملاحظة العميل',
-    statuses: { pending: 'قيد الانتظار', confirmed: 'تم التأكيد', preparing: 'قيد التجهيز', out_for_delivery: 'في الطريق', delivered: 'تم التوصيل', cancelled: 'ملغي' },
+    statuses: { pending: 'بانتظار تأكيد التوفر', confirmed: 'تم التأكيد', preparing: 'قيد التجهيز', out_for_delivery: 'في الطريق', delivered: 'تم التوصيل', cancelled: 'ملغي' },
     payments: { awaiting_payment: 'بانتظار المراجعة', unpaid: 'غير مدفوع', paid: 'مدفوع' },
     methods: { vodafone_cash: 'فودافون كاش', cash_on_delivery: 'الدفع عند الاستلام' },
   },
@@ -97,10 +107,10 @@ function newDraft(product?: Product): ProductDraft {
     description: product.description || '',
     description_ar: product.description_ar || '',
     price: String(product.price),
-    stock: String(product.stock),
     category: product.category || '',
     occasion: product.occasion || '',
     image_url: product.image_url || '',
+    imageFile: null,
     active: product.active,
     featured: product.featured,
     best_seller: product.best_seller,
@@ -128,7 +138,21 @@ export function AdminPage() {
   const [nextOrderStatus, setNextOrderStatus] = useState('')
   const [nextPaymentStatus, setNextPaymentStatus] = useState('')
   const [zoneDrafts, setZoneDrafts] = useState<Record<number, { fee: string; active: boolean; name_en: string; name_ar: string }>>({})
+  const [imagePreview, setImagePreview] = useState('')
+  const [imagePreviewFailed, setImagePreviewFailed] = useState(false)
   const selectedOrder = orders.find((order) => order.id === selectedOrderId) || null
+  const refundWarning = selectedOrder?.payment_status === 'paid'
+    && (nextOrderStatus || selectedOrder.status) === 'cancelled'
+
+  useEffect(() => {
+    setImagePreviewFailed(false)
+    if (draft?.imageFile) {
+      const preview = URL.createObjectURL(draft.imageFile)
+      setImagePreview(preview)
+      return () => URL.revokeObjectURL(preview)
+    }
+    setImagePreview(draft?.image_url || '')
+  }, [draft?.imageFile, draft?.image_url])
 
   async function loadDashboard() {
     setBusy(true)
@@ -220,15 +244,16 @@ export function AdminPage() {
     setError('')
     setNotice('')
     try {
+      let imageUrl = draft.image_url.trim() || null
+      if (draft.imageFile) imageUrl = (await uploadProductImage(draft.imageFile)).image_url
       const saved = await saveProduct({
         name: draft.name.trim(),
         name_ar: draft.name_ar.trim() || null,
         description: draft.description.trim() || null,
         description_ar: draft.description_ar.trim() || null,
         price: draft.price,
-        stock: Number(draft.stock),
         active: draft.active,
-        image_url: draft.image_url.trim() || null,
+        image_url: imageUrl,
         category: draft.category.trim() || null,
         occasion: draft.occasion.trim() || null,
         featured: draft.featured,
@@ -240,7 +265,11 @@ export function AdminPage() {
       setDraft(null)
       setNotice(text.productSaved)
     } catch (caught) {
-      setError(caught instanceof ApiError && caught.status === 401 ? text.sessionExpired : text.genericError)
+      setError(caught instanceof ApiError && caught.status === 401
+        ? text.sessionExpired
+        : caught instanceof ApiError && caught.status === 503
+          ? text.uploadDisabled
+        : draft.imageFile ? text.imageUploadError : text.genericError)
     } finally {
       setBusy(false)
     }
@@ -328,8 +357,8 @@ export function AdminPage() {
             <div className="admin-product-list">
               {products.length === 0 && <p className="admin-empty">{text.noProducts}</p>}
               {products.map((product) => <article key={product.id} className="admin-product-row">
-                {product.image_url ? <img src={product.image_url} alt="" /> : <div className="admin-image-empty" aria-label={text.noImage}>✿</div>}
-                <div className="admin-product-copy"><strong>{language === 'ar' ? product.name_ar || product.name : product.name}</strong><span>{formatMoney(product.price, language)} · {product.stock} {text.stock}</span><small>{product.active ? text.active : '—'} · {product.category || '—'}</small></div>
+                <ProductImage product={product} className="admin-product-image" />
+                <div className="admin-product-copy"><strong>{language === 'ar' ? product.name_ar || product.name : product.name}</strong><span>{formatMoney(product.price, language)}</span><small>{product.active ? text.active : '—'} · {product.category || '—'}</small></div>
                 <button className="button button-outline" type="button" onClick={() => setDraft(newDraft(product))}>{text.edit}</button>
               </article>)}
             </div>
@@ -339,12 +368,23 @@ export function AdminPage() {
                 <label>{text.name}<input required maxLength={150} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
                 <label>{text.nameAr}<input maxLength={150} value={draft.name_ar} onChange={(event) => setDraft({ ...draft, name_ar: event.target.value })} /></label>
                 <label>{text.price}<input required type="number" min="0.01" step="0.01" value={draft.price} onChange={(event) => setDraft({ ...draft, price: event.target.value })} /></label>
-                <label>{text.stock}<input required type="number" min="0" step="1" value={draft.stock} onChange={(event) => setDraft({ ...draft, stock: event.target.value })} /></label>
                 <label>{text.category}<input maxLength={100} value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })} /></label>
                 <label>{text.occasion}<input maxLength={100} value={draft.occasion} onChange={(event) => setDraft({ ...draft, occasion: event.target.value })} /></label>
                 <label className="admin-wide">{text.description}<textarea maxLength={500} rows={3} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
                 <label className="admin-wide">{text.descriptionAr}<textarea maxLength={500} rows={3} value={draft.description_ar} onChange={(event) => setDraft({ ...draft, description_ar: event.target.value })} /></label>
-                <label className="admin-wide">{text.image}<input type="url" maxLength={500} placeholder="https://" value={draft.image_url} onChange={(event) => setDraft({ ...draft, image_url: event.target.value })} /></label>
+                <div className="admin-wide admin-image-field">
+                  <span>{text.image}</span>
+                  <label className="admin-upload-control">{text.upload}<input type="file" accept="image/jpeg,image/png,image/webp" aria-label={text.upload} onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    if (file) setDraft({ ...draft, imageFile: file, image_url: '' })
+                    event.currentTarget.value = ''
+                    setError('')
+                  }} /></label>
+                  <small>{language === 'ar' ? 'أو' : 'OR'}</small>
+                  <label>{text.image}<input type="text" inputMode="url" maxLength={500} placeholder="https://" value={draft.image_url} onChange={(event) => setDraft({ ...draft, image_url: event.target.value, imageFile: null })} /></label>
+                  <div className="admin-image-preview" aria-label={text.preview}>{imagePreview && !imagePreviewFailed ? <img src={imagePreview} alt={draft.name_ar && language === 'ar' ? draft.name_ar : draft.name || text.preview} onError={() => setImagePreviewFailed(true)} /> : <span>{text.noImage}</span>}</div>
+                  {(draft.image_url || draft.imageFile) && <button className="button button-outline" type="button" onClick={() => setDraft({ ...draft, image_url: '', imageFile: null })}>{text.removeImage}</button>}
+                </div>
               </div>
               <div className="admin-checks">
                 {(['active', 'featured', 'best_seller'] as const).map((field) => <label key={field}><input type="checkbox" checked={draft[field]} onChange={(event) => setDraft({ ...draft, [field]: event.target.checked })} />{text[field === 'best_seller' ? 'bestSeller' : field]}</label>)}
@@ -360,7 +400,7 @@ export function AdminPage() {
             <div className="admin-order-list">
               {orders.length === 0 && <p className="admin-empty">{text.noOrders}</p>}
               {orders.map((order) => <button key={order.id} type="button" className={selectedOrderId === order.id ? 'admin-order-row active' : 'admin-order-row'} onClick={() => { setSelectedOrderId(order.id); setNextOrderStatus(''); setNextPaymentStatus('') }}>
-                <span><strong>#{order.id}</strong><small>{order.customer_name} · {formatDate(order.delivery_date, language)}</small></span><b>{formatMoney(order.total_price, language)}</b>
+                <span><strong>#{order.id}</strong><small>{order.customer_name} · {formatDate(order.delivery_date, language)}</small><small>{text.statuses[order.status as keyof typeof text.statuses] || order.status}</small></span><b>{formatMoney(order.total_price, language)}</b>
               </button>)}
             </div>
             {selectedOrder && <article className="admin-order-detail">
@@ -382,6 +422,7 @@ export function AdminPage() {
                 return <li key={item.product_id}><span>{label} × {item.quantity}</span><strong>{formatMoney(item.subtotal, language)}</strong></li>
               })}</ul>
               <div className="admin-totals"><p><span>{text.subtotal}</span><strong>{formatMoney(selectedOrder.subtotal, language)}</strong></p><p><span>{text.fee}</span><strong>{formatMoney(selectedOrder.delivery_fee, language)}</strong></p><p><span>{text.total}</span><strong>{formatMoney(selectedOrder.total_price, language)}</strong></p></div>
+              {refundWarning && <p className="admin-error" role="alert">{text.refundWarning}</p>}
               <div className="admin-order-controls">
                 <label>{text.status}<select value={nextOrderStatus || selectedOrder.status} onChange={(event) => setNextOrderStatus(event.target.value)}><option value={selectedOrder.status}>{text.statuses[selectedOrder.status as keyof typeof text.statuses] || selectedOrder.status}</option>{(orderTransitions[selectedOrder.status] || []).map((status) => <option key={status} value={status}>{text.statuses[status as keyof typeof text.statuses] || status}</option>)}</select></label>
                 <label>{text.payment}<select value={nextPaymentStatus || selectedOrder.payment_status} onChange={(event) => setNextPaymentStatus(event.target.value)}><option value={selectedOrder.payment_status}>{text.payments[selectedOrder.payment_status]}</option>{selectedOrder.payment_status !== 'paid' && <option value="paid">{text.payments.paid}</option>}</select></label>

@@ -9,6 +9,7 @@ __pycache__/
 *.py[cod]
 *.dp
 *.db
+media/
 node_modules/
 dist/
 *.tsbuildinfo

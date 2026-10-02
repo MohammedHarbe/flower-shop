@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 from typing import Annotated
 
@@ -14,6 +15,8 @@ _IMAGE_URL_ADAPTER = TypeAdapter(HttpUrl)
 def validate_image_url(value: str | None) -> str | None:
     if value is None:
         return None
+    if re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*products/[0-9a-f]{32}\.(?:jpg|png|webp)", value):
+        return value
     try:
         url = _IMAGE_URL_ADAPTER.validate_python(value)
     except ValidationError as error:

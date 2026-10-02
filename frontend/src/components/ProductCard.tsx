@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useCart } from '../context/CartContext'
 import { useLanguage } from '../context/LanguageContext'
 import type { Product } from '../types'
-import { categoryLabel, formatMoney, productName } from '../utils'
+import { categoryLabel, formatMoney, isDemoProduct, productName } from '../utils'
 
 export function ProductImage({ product, className = '' }: { product: Product; className?: string }) {
   const { language, t } = useLanguage()
@@ -13,6 +13,7 @@ export function ProductImage({ product, className = '' }: { product: Product; cl
     const value = product.image_url?.trim()
     if (!value) return null
     if (value.startsWith('/products/') && !value.includes('..') && /^\/products\/[a-z0-9_./-]+$/i.test(value)) return value
+    if (/^\/(?:[a-z0-9_-]+\/)*products\/[a-f0-9]{32}\.(?:jpg|png|webp)$/i.test(value)) return value
     try {
       const url = new URL(value)
       return ['http:', 'https:'].includes(url.protocol) && !/(^|\.)fbcdn\.net$/i.test(url.hostname) ? url.href : null
@@ -53,7 +54,7 @@ export function ProductCard({ product }: { product: Product }) {
       <div className="product-card-body">
         <div className="product-card-meta"><span>{product.category ? categoryLabel(product.category, language) : 'ToneFlowers'}</span></div>
         <Link to={`/products/${product.id}`} className="product-card-name">{name}</Link>
-        <div className="product-card-bottom"><strong>{formatMoney(product.price, language)}</strong><button className={`card-add${added ? ' is-added' : ''}`} type="button" onClick={add} disabled={!product.active} aria-label={`${product.active ? (added ? t.product.added : t.common.addToCart) : t.common.soldOut}: ${name}`}>{added ? <>{t.product.addedShort} <span aria-hidden="true">✓</span></> : !product.active ? t.common.soldOut : t.common.addToCart}</button></div>
+        <div className="product-card-bottom"><strong>{isDemoProduct(product) && <small className="demo-price-label">{t.common.demoPrice}</small>}{formatMoney(product.price, language)}</strong><button className={`card-add${added ? ' is-added' : ''}`} type="button" onClick={add} disabled={!product.active} aria-label={`${product.active ? (added ? t.product.added : t.common.addToCart) : t.common.soldOut}: ${name}`}>{added ? <>{t.product.addedShort} <span aria-hidden="true">✓</span></> : !product.active ? t.common.soldOut : t.common.addToCart}</button></div>
         <Link to={`/products/${product.id}`} className="card-view">{t.common.viewProduct}</Link>
         <span className="sr-only" role="status" aria-live="polite">{added ? t.product.added : ''}</span>
       </div>

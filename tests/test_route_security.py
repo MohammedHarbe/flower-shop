@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from backend.admin_auth import require_admin_key
 from backend.main import app
 from backend.rate_limiter import InMemoryRateLimiter
+from backend.routers.media import router as media_router
 from backend.routers.orders import router as orders_router
 from backend.routers.products import router as products_router
 
@@ -22,13 +23,14 @@ class RouteSecurityTests(unittest.TestCase):
         # FastAPI 0.141 keeps included routers live, so inspect their own routes.
         routes = {
             (method, route.path): route
-            for router in (orders_router, products_router)
+            for router in (orders_router, products_router, media_router)
             for route in router.routes
             if isinstance(route, APIRoute)
             for method in route.methods
         }
         protected = (
             ("POST", "/products"),
+            ("POST", "/admin/uploads/products"),
             ("PATCH", "/products/{product_id}"),
             ("GET", "/admin/products"),
             ("GET", "/orders"),

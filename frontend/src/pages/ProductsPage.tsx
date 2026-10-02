@@ -20,7 +20,6 @@ export function ProductsPage() {
   const category = params.get('category') || ''
   const occasion = catalogSlug(params.get('occasion') || '')
   const sort = params.get('sort') || 'name'
-  const availability = params.get('availability') || 'all'
   const best = params.get('best') === '1'
   const featured = params.get('featured') === '1'
 
@@ -44,7 +43,7 @@ export function ProductsPage() {
     })
     result.sort((a, b) => sort === 'price-low' ? moneyAmount(a.price) - moneyAmount(b.price) : sort === 'price-high' ? moneyAmount(b.price) - moneyAmount(a.price) : productName(a, language).localeCompare(productName(b, language), language))
     return result
-  }, [products, q, best, featured, category, occasion, availability, sort, language])
+  }, [products, q, best, featured, category, occasion, sort, language])
 
   if (!loading && !error && products.length === 0) {
     return <div className="page products-page"><div className="page-banner"><div className="container"><p className="eyebrow">{t.products.eyebrow}</p><h1>{t.products.title}</h1><p>{t.products.copy}</p></div></div><div className="container empty-state"><p>{t.products.empty}</p></div></div>

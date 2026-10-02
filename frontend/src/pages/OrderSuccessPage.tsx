@@ -10,7 +10,7 @@ export function OrderSuccessPage() {
   const { id } = useParams()
   const location = useLocation()
   const { t, language } = useLanguage()
-  const state = location.state as { order?: OrderConfirmation; publicConfig?: PublicConfig | null } | null
+  const state = location.state as { order?: OrderConfirmation; publicConfig?: PublicConfig | null; demoOrder?: boolean } | null
   const order = state?.order && String(state.order.id) === id ? state.order : null
   const [publicConfig, setPublicConfig] = useState<PublicConfig | null>(state?.publicConfig || null)
   const [copied, setCopied] = useState(false)
@@ -45,6 +45,8 @@ export function OrderSuccessPage() {
   const paymentStatusLabel = Object.prototype.hasOwnProperty.call(paymentStatusLabels, order.payment_status)
     ? paymentStatusLabels[order.payment_status as keyof typeof paymentStatusLabels]
     : t.success.paymentStatusUnavailable
+  const waitingForAvailability = order.status === 'pending'
+  const paymentCanProceed = order.status !== 'pending' && order.status !== 'cancelled'
   const slotLabel = Object.prototype.hasOwnProperty.call(t.checkout.slotOptions, order.delivery_slot)
     ? t.checkout.slotOptions[order.delivery_slot as DeliverySlot]
     : t.checkout.slotUnconfirmed
@@ -74,6 +76,7 @@ export function OrderSuccessPage() {
       <p className="eyebrow">{t.success.eyebrow}</p>
       <h1>{t.success.title}</h1>
       <p className="success-lead">{t.success.copy}</p>
+        {state?.demoOrder && <p className="demo-price-notice" role="note">{t.common.demoCatalogNotice}</p>}
       <div className="success-card">
         <div className="success-row"><span>{t.success.orderNumber}</span><strong>#{id}</strong></div>
         <div className="success-row"><span>{t.success.status}</span><strong>{statusLabel}</strong></div>
@@ -87,26 +90,29 @@ export function OrderSuccessPage() {
       </div>
       {order.payment_method === 'vodafone_cash' ? (
         <section className="payment-instructions" aria-live="polite">
-          <h2>{t.success.vodafoneTitle}</h2>
-          <p>{t.success.vodafoneCopy}</p>
-          <p className="payment-status-line">{t.success.paymentStatus}: <strong>{paymentStatusLabel}</strong></p>
-          <div className="cash-payment-number"><strong>{cashNumber || t.success.numberUnavailable}</strong>
-            {cashNumber && <button type="button" className="button button-outline" onClick={copyCashNumber}>{copied ? t.success.copied : t.success.copyNumber}</button>}
-          </div>
-          {copyFailed && <p className="inline-warning">{t.success.copyFailed}</p>}
-          <p className="cash-payment-total">{t.success.payExact} <strong>{formatMoney(order.total_price, language)}</strong></p>
-          <p>{t.success.orderNumber}: <strong>#{order.id}</strong></p>
-          {order.payment_status === 'awaiting_payment' && <p>{t.success.awaitingReviewCopy}</p>}
-          {order.payment_status === 'paid' && <p>{t.success.paymentAlreadyRecorded}</p>}
-          {order.payment_status !== 'paid' && <ol className="payment-steps">{t.success.transferSteps.map((step) => <li key={step}>{step}</li>)}</ol>}
-          {order.payment_status !== 'paid' && whatsappProofHref && <a className="button button-primary" href={whatsappProofHref} target="_blank" rel="noreferrer">{t.success.sendProof}</a>}
+          <h2>{waitingForAvailability ? t.success.availabilityFirstTitle : t.success.vodafoneTitle}</h2>
+          <p>{waitingForAvailability ? t.success.availabilityFirstCopy : t.success.vodafoneCopy}</p>
+          <p className="payment-status-line">{t.success.paymentStatus}: <strong>{waitingForAvailability ? t.success.notRequested : paymentStatusLabel}</strong></p>
+          {paymentCanProceed && <>
+            <div className="cash-payment-number"><strong>{cashNumber || t.success.numberUnavailable}</strong>
+              {cashNumber && <button type="button" className="button button-outline" onClick={copyCashNumber}>{copied ? t.success.copied : t.success.copyNumber}</button>}
+            </div>
+            {copyFailed && <p className="inline-warning">{t.success.copyFailed}</p>}
+            <p className="cash-payment-total">{t.success.payExact} <strong>{formatMoney(order.total_price, language)}</strong></p>
+            <p>{t.success.orderNumber}: <strong>#{order.id}</strong></p>
+            {order.payment_status === 'awaiting_payment' && <p>{t.success.awaitingReviewCopy}</p>}
+            {order.payment_status === 'paid' && <p>{t.success.paymentAlreadyRecorded}</p>}
+            {order.payment_status !== 'paid' && <ol className="payment-steps">{t.success.transferSteps.map((step) => <li key={step}>{step}</li>)}</ol>}
+            {order.payment_status !== 'paid' && whatsappProofHref && <a className="button button-primary" href={whatsappProofHref} target="_blank" rel="noreferrer">{t.success.sendProof}</a>}
+          </>}
+          {order.status === 'cancelled' && <p>{t.success.cancelledNoPayment}</p>}
         </section>
       ) : <section className="payment-instructions" role="status">
         <h2>{t.success.cashOnDeliveryTitle}</h2>
         <p>{t.checkout.payment}: <strong>{t.checkout.cashOnDelivery}</strong></p>
-        <p>{order.payment_status === 'paid' ? t.success.amountPaid : t.success.amountDue}: <strong>{formatMoney(order.total_price, language)}</strong></p>
+        {paymentCanProceed && <p>{order.payment_status === 'paid' ? t.success.amountPaid : t.success.amountDue}: <strong>{formatMoney(order.total_price, language)}</strong></p>}
         <p>{t.success.paymentStatus}: <strong>{paymentStatusLabel}</strong></p>
-        <p>{t.success.cashOnDelivery}</p>
+        <p>{waitingForAvailability ? t.success.availabilityFirstCopy : order.status === 'cancelled' ? t.success.cancelledNoPayment : t.success.cashOnDelivery}</p>
       </section>}
       {whatsappContactHref && <p className="success-contact">{t.success.needHelp} <a href={whatsappContactHref} target="_blank" rel="noreferrer">{t.success.whatsappContact}</a></p>}
       <Link className="button button-primary" to="/products">{t.common.continueShopping}</Link>

@@ -295,13 +295,19 @@ class OrderTests(unittest.TestCase):
     def test_product_image_url_requires_http_and_can_be_cleared(self):
         data = {"name": "Rose", "price": "20.00", "stock": 1}
         valid = "https://example.com/rose.jpg"
+        uploaded = "/media/products/0123456789abcdef0123456789abcdef.webp"
         self.assertEqual(ProductCreate.model_validate({**data, "image_url": valid}).image_url, valid)
+        self.assertEqual(ProductCreate.model_validate({**data, "image_url": uploaded}).image_url, uploaded)
         self.assertEqual(ProductUpdate.model_validate({"image_url": valid}).image_url, valid)
+        self.assertEqual(ProductUpdate.model_validate({"image_url": uploaded}).image_url, uploaded)
         self.assertEqual(
             ProductUpdate.model_validate({"image_url": None}).model_dump(exclude_unset=True),
             {"image_url": None},
         )
-        for invalid in ("string", "/images/rose.jpg", "ftp://example.com/rose.jpg", "javascript:alert(1)", "http://"):
+        for invalid in (
+            "string", "/images/rose.jpg", "/media/products/../secret.jpg",
+            "ftp://example.com/rose.jpg", "javascript:alert(1)", "http://",
+        ):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(ValidationError):
                     ProductCreate.model_validate({**data, "image_url": invalid})
@@ -365,7 +371,9 @@ class OrderTests(unittest.TestCase):
 
     def test_notification_contains_saved_details_and_two_recipients(self):
         tasks = BackgroundTasks()
-        create_order(OrderCreate.model_validate(self.payload()), tasks, self.db)
+        payload = self.payload()
+        payload.update(delivery_latitude=30.0, delivery_longitude=31.0)
+        create_order(OrderCreate.model_validate(payload), tasks, self.db)
         settings = Settings(
             _env_file=None,
             smtp_username="sender@example.com",
@@ -390,14 +398,18 @@ class OrderTests(unittest.TestCase):
         for expected in (
             "New ToneFlowers Order",
             "Customer",
+            "customer@example.com",
+            "+201012345678",
             "Receiver",
+            "+201112345678",
             "Cairo",
             "Nasr City",
             "1 Flower Street",
             "Roses",
             "10:00 AM - 2:00 PM",
-            "Payment method: cash_on_delivery",
-            "Payment status: unpaid",
+            "ORDER REQUIRES AVAILABILITY CONFIRMATION",
+            "Payment preference: Cash on Delivery / الدفع عند الاستلام",
+            "Payment status: Unpaid / غير مدفوع",
             "Subtotal: 200.00",
             "Delivery fee: 0.00",
             "Total: 200.00",
@@ -405,6 +417,8 @@ class OrderTests(unittest.TestCase):
             "200.00",
         ):
             self.assertIn(expected, body)
+        self.assertNotIn("location:", body.lower())
+        self.assertNotIn("30.0, 31.0", body)
 
     def test_admin_order_list_filters_and_newest_first(self):
         first = create_order(OrderCreate.model_validate(self.payload()), BackgroundTasks(), self.db)

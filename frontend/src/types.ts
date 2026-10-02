@@ -60,9 +60,6 @@ export interface OrderCreatePayload {
   delivery_slot: DeliverySlot
   payment_method: PaymentMethod
   delivery_zone_id: number | null
-  delivery_latitude: number | null
-  delivery_longitude: number | null
-  google_place_id: string | null
   card_message: string | null
   sender_name_on_card: string | null
   customer_note: string | null

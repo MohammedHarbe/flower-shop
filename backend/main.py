@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -13,6 +14,7 @@ from backend.database import get_db
 from backend.logging_utils import log_failure
 from backend.payment_method import PaymentMethod
 from backend.routers.admin import router as admin_router
+from backend.routers.media import router as media_router
 from backend.routers.orders import router as orders_router
 from backend.routers.products import router as products_router
 from backend.settings import Settings
@@ -73,6 +75,12 @@ app.add_middleware(
 app.include_router(admin_router)
 app.include_router(orders_router)
 app.include_router(products_router)
+app.include_router(media_router)
+app.mount(
+    settings.media_route_path,
+    StaticFiles(directory=str(settings.resolved_media_dir), check_dir=False),
+    name="media",
+)
 
 
 @app.get("/public-config", tags=["config"])

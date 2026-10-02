@@ -2,7 +2,7 @@ import { apiRequest } from './client'
 import type { DeliveryZone, OrderResponse, Product } from '../types'
 
 type AdminLogin = { email: string; password: string }
-type ProductInput = Omit<Product, 'id'>
+type ProductInput = Omit<Product, 'id' | 'stock'> & { stock?: number }
 
 function adminRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   return apiRequest<T>(path, {
@@ -35,6 +35,14 @@ export function saveProduct(payload: ProductInput, id?: number): Promise<Product
   return adminRequest(id ? `/products/${id}` : '/products', {
     method: id ? 'PATCH' : 'POST',
     body: JSON.stringify(payload),
+  })
+}
+
+export function uploadProductImage(file: File): Promise<{ image_url: string }> {
+  return adminRequest('/admin/uploads/products', {
+    method: 'POST',
+    headers: { 'Content-Type': file.type },
+    body: file,
   })
 }
 

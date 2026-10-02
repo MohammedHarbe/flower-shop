@@ -2,7 +2,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from threading import Barrier, Event, Lock
+from threading import Barrier, Event
 from uuid import uuid4
 
 from sqlalchemy import event, text
@@ -56,27 +56,21 @@ class PostgresConcurrencyTests(unittest.TestCase):
         event.listen(self.engine, name, callback)
         self.addCleanup(event.remove, self.engine, name, callback)
 
-    def test_stock_one_six_overlapping_orders(self):
-        self.seed(1)
+    def test_simultaneous_orders_ignore_legacy_stock_values(self):
+        self.seed(0)
         barrier = Barrier(6)
-        backend_pids = set()
-        lock = Lock()
 
-        def overlap(conn, cursor, statement, parameters, context, executemany):
-            if statement.startswith("UPDATE products"):
-                with lock:
-                    backend_pids.add(conn.connection.driver_connection.info.backend_pid)
-                barrier.wait(timeout=10)
+        def submit(_):
+            barrier.wait(timeout=10)
+            return self.post(self.payload())
 
-        self.listen("before_cursor_execute", overlap)
         with ThreadPoolExecutor(max_workers=6) as pool:
-            results = list(pool.map(self.post, [self.payload() for _ in range(6)]))
-        self.assertEqual(sorted(code for code, _ in results), [201] + [409] * 5)
-        self.assertEqual(len(backend_pids), 6)
+            results = list(pool.map(submit, range(6)))
+        self.assertEqual([code for code, _ in results], [201] * 6)
         with Session(self.engine) as db:
             self.assertEqual(db.get(Product, 1).stock, 0)
-            self.assertEqual(db.query(Order).count(), 1)
-            self.assertEqual(db.query(OrderItem).count(), 1)
+            self.assertEqual(db.query(Order).count(), 6)
+            self.assertEqual(db.query(OrderItem).count(), 6)
 
     def test_opposite_product_order_twelve_overlapping_pairs(self):
         rounds = 12
@@ -84,31 +78,19 @@ class PostgresConcurrencyTests(unittest.TestCase):
         for iteration in range(rounds):
             with self.subTest(iteration=iteration):
                 barrier = Barrier(2)
-                updates = {}
-                lock = Lock()
+                items = [{"product_id": 1, "quantity": 1}, {"product_id": 2, "quantity": 1}]
 
-                def overlap(conn, cursor, statement, parameters, context, executemany):
-                    if statement.startswith("UPDATE products"):
-                        with lock:
-                            ids = updates.setdefault(conn, [])
-                            ids.append(context.compiled_parameters[0]["id_1"])
-                            first = len(ids) == 1
-                        if first:
-                            barrier.wait(timeout=10)
+                def submit(body):
+                    barrier.wait(timeout=10)
+                    return self.post(body)
 
-                event.listen(self.engine, "before_cursor_execute", overlap)
-                try:
-                    items = [{"product_id": 1, "quantity": 1}, {"product_id": 2, "quantity": 1}]
-                    with ThreadPoolExecutor(max_workers=2) as pool:
-                        results = list(pool.map(self.post, [
-                            self.payload(items=items), self.payload(items=list(reversed(items))),
-                        ]))
-                    self.assertEqual([code for code, _ in results], [201, 201])
-                    self.assertEqual(list(updates.values()), [[1, 2], [1, 2]])
-                finally:
-                    event.remove(self.engine, "before_cursor_execute", overlap)
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = list(pool.map(submit, [
+                        self.payload(items=items), self.payload(items=list(reversed(items))),
+                    ]))
+                self.assertEqual([code for code, _ in results], [201, 201])
         with Session(self.engine) as db:
-            self.assertEqual([db.get(Product, item).stock for item in (1, 2)], [0, 0])
+            self.assertEqual([db.get(Product, item).stock for item in (1, 2)], [rounds * 2] * 2)
             self.assertEqual(db.query(Order).count(), rounds * 2)
 
     def test_confirmed_order_two_overlapping_cancellations(self):
@@ -118,7 +100,7 @@ class PostgresConcurrencyTests(unittest.TestCase):
         path = f"/orders/{order['id']}/status"
         self.assertEqual(request_json(self.base, path, {"status": "confirmed"}, "PATCH")[0], 200)
         with Session(self.engine) as db:
-            self.assertEqual(db.get(Product, 1).stock, 8)
+            self.assertEqual(db.get(Product, 1).stock, 10)
         barrier = Barrier(2)
 
         def overlap(conn, cursor, statement, parameters, context, executemany):
@@ -153,7 +135,7 @@ class PostgresConcurrencyTests(unittest.TestCase):
         self.assertEqual(self.post({**body, "items": [{"product_id": 1, "quantity": 1}]})[0], 409)
         with Session(self.engine) as db:
             self.assertEqual(db.query(Order).count(), 1)
-            self.assertEqual(db.get(Product, 1).stock, 0)
+            self.assertEqual(db.get(Product, 1).stock, 2)
         self.assertEqual(self.notification.call_count, 1)
 
     def test_replay_when_winner_exhausts_stock_after_initial_key_lookup(self):
@@ -183,28 +165,22 @@ class PostgresConcurrencyTests(unittest.TestCase):
         self.assertEqual(replay["id"], winner["id"])
         with Session(self.engine) as db:
             self.assertEqual(db.query(Order).count(), 1)
-            self.assertEqual(db.get(Product, 1).stock, 0)
+            self.assertEqual(db.get(Product, 1).stock, 1)
 
-    def test_second_item_failure_rolls_back_order_items_and_stock(self):
+    def test_inactive_product_is_rejected_without_stock_mutation(self):
         self.seed(5, count=2)
-
-        def exhaust_second(conn, cursor, statement, parameters, context, executemany):
-            if statement.startswith("UPDATE products") and context.compiled_parameters[0].get("id_1") == 2:
-                # Another committed transaction sells the second product after
-                # validation. The first product was already decremented here.
-                with self.engine.begin() as other:
-                    other.execute(text("UPDATE products SET stock = 0 WHERE id = 2"))
-
-        self.listen("before_cursor_execute", exhaust_second)
+        with Session(self.engine) as db:
+            db.get(Product, 2).active = False
+            db.commit()
         code, _ = self.post(self.payload(items=[
             {"product_id": 1, "quantity": 1}, {"product_id": 2, "quantity": 1},
         ]))
-        self.assertEqual(code, 409)
+        self.assertEqual(code, 400)
         with Session(self.engine) as db:
             self.assertEqual(db.query(Order).count(), 0)
             self.assertEqual(db.query(OrderItem).count(), 0)
             self.assertEqual(db.get(Product, 1).stock, 5)
-            self.assertEqual(db.get(Product, 2).stock, 0)
+            self.assertEqual(db.get(Product, 2).stock, 5)
 
     def test_postgres_numeric_and_cairo_timestamps_serialize_through_api(self):
         self.seed(10)

@@ -153,6 +153,17 @@ export function Layout({ children }: PropsWithChildren) {
       document.head.append(robots)
     }
     robots.content = adminPage ? 'noindex, nofollow, noarchive' : 'index, follow'
+    let canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]')
+    if (config.siteUrl && !adminPage) {
+      if (!canonical) {
+        canonical = document.createElement('link')
+        canonical.rel = 'canonical'
+        document.head.append(canonical)
+      }
+      canonical.href = new URL(location.pathname, `${config.siteUrl}/`).href
+    } else {
+      canonical?.remove()
+    }
   }, [language, location.pathname])
   useEffect(() => {
     if (location.hash) {

@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import EmailStr, SecretStr
+from pydantic import EmailStr, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,12 +33,63 @@ class Settings(BaseSettings):
     order_rate_limit_per_minute: int = 30
     whatsapp_number: str = ""
     vodafone_cash_number: str = ""
+    media_dir: Path = Path(__file__).resolve().parents[1] / "media"
+    media_base_url: str = "/media"
+    media_persistent_storage: bool = False
 
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
     smtp_username: str = ""
     smtp_password: SecretStr = SecretStr("")
     shop_notification_emails: str = ""
+
+    @field_validator("media_base_url")
+    @classmethod
+    def validate_media_base_url(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        if value.startswith("/") and not value.startswith("//"):
+            parsed = urlsplit(value)
+            segments = parsed.path.strip("/").split("/")
+            reserved = {"admin", "delivery-zones", "docs", "health", "openapi.json", "orders", "products", "public-config"}
+            if (parsed.path == "/" or parsed.query or parsed.fragment
+                    or not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+", parsed.path)
+                    or segments[0].lower() in reserved):
+                raise ValueError("MEDIA_BASE_URL must be a safe root-relative URL path")
+            return value
+        try:
+            parsed = urlsplit(value)
+            port = parsed.port
+            segments = parsed.path.strip("/").split("/") if parsed.path.strip("/") else []
+            reserved = {"admin", "delivery-zones", "docs", "health", "openapi.json", "orders", "products", "public-config"}
+            valid = (
+                parsed.scheme in {"http", "https"} and parsed.hostname
+                and parsed.username is None and parsed.password is None
+                and re.fullmatch(r"/(?:[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*)?", parsed.path or "/")
+                and (port is None or 1 <= port <= 65535)
+                and (not segments or segments[0].lower() not in reserved)
+                and not parsed.query and not parsed.fragment
+            )
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError("MEDIA_BASE_URL must be a root-relative path or an absolute HTTP(S) origin")
+        base = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
+        return f"{base}/media" if parsed.path in {"", "/"} else base
+
+    @property
+    def resolved_media_dir(self) -> Path:
+        return self.media_dir if self.media_dir.is_absolute() else Path(__file__).resolve().parents[1] / self.media_dir
+
+    @property
+    def media_route_path(self) -> str:
+        parsed = urlsplit(self.media_base_url)
+        if parsed.scheme:
+            return parsed.path.rstrip("/") or "/media"
+        return self.media_base_url
+
+    @property
+    def media_uploads_enabled(self) -> bool:
+        return self.app_env == "development" or self.media_persistent_storage
 
     @property
     def allowed_origins(self) -> list[str]:

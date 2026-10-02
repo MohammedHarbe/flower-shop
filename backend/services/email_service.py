@@ -17,9 +17,26 @@ from backend.time_utils import cairo_now
 logger = logging.getLogger(__name__)
 
 DELIVERY_SLOT_LABELS = {
-    "morning": "10:00 AM - 2:00 PM",
-    "afternoon": "2:00 PM - 6:00 PM",
-    "evening": "6:00 PM - 10:00 PM",
+    "morning": "Morning (10:00 AM - 2:00 PM) / صباحًا (10 ص - 2 م)",
+    "afternoon": "Afternoon (2:00 PM - 6:00 PM) / بعد الظهر (2 م - 6 م)",
+    "evening": "Evening (6:00 PM - 10:00 PM) / مساءً (6 م - 10 م)",
+}
+ORDER_STATUS_LABELS = {
+    "pending": "Pending availability confirmation / بانتظار تأكيد توفر الزهور",
+    "confirmed": "Confirmed / تم التأكيد",
+    "preparing": "Preparing / قيد التجهيز",
+    "out_for_delivery": "Out for delivery / في الطريق",
+    "delivered": "Delivered / تم التوصيل",
+    "cancelled": "Cancelled / ملغي",
+}
+PAYMENT_METHOD_LABELS = {
+    "vodafone_cash": "Vodafone Cash / فودافون كاش",
+    "cash_on_delivery": "Cash on Delivery / الدفع عند الاستلام",
+}
+PAYMENT_STATUS_LABELS = {
+    "awaiting_payment": "Awaiting payment after availability confirmation / بانتظار الدفع بعد تأكيد التوفر",
+    "unpaid": "Unpaid / غير مدفوع",
+    "paid": "Paid / مدفوع",
 }
 
 
@@ -50,17 +67,20 @@ def send_order_notification(order: dict[str, Any]) -> None:
         total_price = Decimal(order.get("total_price", subtotal + delivery_fee))
         payment_method = order.get("payment_method", "cash_on_delivery")
         payment_status = order.get("payment_status", "unpaid")
-        delivery_zone = order.get("delivery_zone")
+        order_status = order.get("status", "pending")
         delivery_slot = str(order.get("delivery_slot", ""))
 
         body = "\n".join(
             [
                 "New ToneFlowers Order",
+                "ORDER REQUIRES AVAILABILITY CONFIRMATION",
+                "الطلب بانتظار تأكيد توفر الزهور",
+                "Do not request Vodafone Cash payment before availability is confirmed.",
                 "",
                 f"Order ID: {order['id']}",
-                f"Order status: {order['status']}",
-                f"Payment method: {payment_method}",
-                f"Payment status: {payment_status}",
+                f"Order status: {ORDER_STATUS_LABELS.get(str(order_status), 'Pending availability confirmation')}",
+                f"Payment preference: {PAYMENT_METHOD_LABELS.get(str(payment_method), 'Payment method not specified')}",
+                f"Payment status: {PAYMENT_STATUS_LABELS.get(str(payment_status), 'Payment status unavailable')}",
                 f"Created time: {order['created_at']}",
                 "",
                 "Customer:",
@@ -78,8 +98,6 @@ def send_order_notification(order: dict[str, Any]) -> None:
                 f"- full address: {order['delivery_address']}",
                 f"- delivery date: {order['delivery_date']}",
                 f"- delivery slot: {DELIVERY_SLOT_LABELS.get(delivery_slot, delivery_slot or 'To be confirmed')}",
-                f"- delivery zone: {delivery_zone or 'Not selected'}",
-                f"- location: {order.get('delivery_latitude', 'n/a')}, {order.get('delivery_longitude', 'n/a')}",
                 "",
                 "Items:",
                 *item_lines,

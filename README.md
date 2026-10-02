@@ -23,6 +23,13 @@ python -m backend.seed_catalog
 python -m uvicorn backend.main:app --reload
 ```
 
+`backend.seed_catalog` is the business bootstrap: it idempotently activates Cairo
+and Giza at 50.00 EGP. It never creates demo products. To intentionally load or
+remove the development/staging demo catalog, run `python -m
+backend.seed_demo_catalog` or `python -m backend.remove_demo_catalog` separately.
+Start the frontend in another terminal with `cd frontend`, `npm ci`, and
+`npm run dev`.
+
 Keep the ignored `.env` file private. For local browser admin, set
 `ADMIN_LOGIN_EMAIL`, a `ADMIN_PASSWORD_HASH` generated with
 `backend.admin_auth.hash_password`, and a random `ADMIN_SESSION_SECRET` of at
@@ -33,10 +40,9 @@ notification values; do not copy them into examples or commit them.
 Swagger UI is at <http://127.0.0.1:8000/docs>.
 
 The database migration command is required before starting a fresh checkout.
-The explicit seed command idempotently activates Cairo and Giza delivery zones
-at 50.00 EGP. In development and staging it also adds up to eight clearly marked
-temporary demo products without replacing existing catalog entries. In production
-it never creates demo products. It does not run automatically at API startup.
+The business bootstrap command idempotently activates Cairo and Giza delivery
+zones at 50.00 EGP. Demo products are created only by the separate explicit
+development/staging command, never automatically at startup or in production.
 Alembic first adopts the original schema, then adds catalog and governorate
 columns, then adds order notification and idempotency tracking. It does not
 delete old products or orders. Historical orders have a null governorate or
@@ -135,6 +141,11 @@ Backend `.env` values are shown in [.env.example](.env.example):
   the ignored local `.env` or deployment secret store only.
 - `ADMIN_SESSION_TTL_SECONDS`, `ADMIN_LOGIN_RATE_LIMIT_PER_MINUTE`,
   `ORDER_RATE_LIMIT_PER_MINUTE`: session lifetime and per-process throttles.
+- `MEDIA_DIR`, `MEDIA_BASE_URL`, `MEDIA_PERSISTENT_STORAGE`: product image
+  storage. Development uploads use local disk; production uploads are disabled
+  unless `MEDIA_PERSISTENT_STORAGE=true` explicitly declares that `MEDIA_DIR` is
+  a durable mounted disk. A local container filesystem is not durable. URL-based
+  images continue to work when uploads are disabled.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`: Gmail SMTP. The
   password must be an App Password, never a normal account password.
 - `SHOP_NOTIFICATION_EMAILS`: comma-separated owner recipients. Public examples
@@ -144,6 +155,8 @@ Backend `.env` values are shown in [.env.example](.env.example):
 Frontend `.env` values are shown in [frontend/.env.example](frontend/.env.example):
 
 - `VITE_API_URL`: backend URL, for example `http://127.0.0.1:8000` locally.
+- `VITE_SITE_URL`: optional real frontend origin. When set, public pages receive
+  canonical URLs; when unset, no canonical URL is emitted.
 - `VITE_WHATSAPP_URL`, `VITE_PHONE`, `VITE_EMAIL`, `VITE_INSTAGRAM_URL`: optional
   contact channels. Unconfigured channels are hidden.
 - `VITE_FACEBOOK_URL`: the ToneFlowers Facebook page supplied for this project.
@@ -167,7 +180,9 @@ variables are visible in the browser.
   with item `product_id` and `quantity`. Send `governorate` as `Cairo` or `Giza`,
   `delivery_slot` as `morning`, `afternoon`, or `evening`, and a UUID
   `idempotency_key`. Repeating the same key returns the saved order without
-  reducing stock or sending another notification. Do not send price, total,
+  sending another notification. Numeric stock is legacy data only: orders do not
+  decrement or restore it and are never rejected based on it. Only `active` controls
+  whether a product can be ordered. Do not send price, total,
   status, or server-generated IDs.
 - The public `POST /orders` response contains only the order ID, status, delivery
   area/date/slot, payment method/status, and backend-calculated totals. It omits
@@ -176,9 +191,11 @@ variables are visible in the browser.
 - `GET /orders` (optional `status` and `delivery_date` filters),
   `GET /orders/{id}`, and `PATCH /orders/{id}/status` require `X-Admin-Key`.
 
-At checkout, the website refreshes product availability and sends IDs and
-quantities. FastAPI validates the order; SQLAlchemy calculates prices, stores
-items, and reduces stock in one transaction. After commit, a background task
+At checkout, the website refreshes product activity and sends IDs and
+quantities. FastAPI validates active products; SQLAlchemy calculates prices and
+stores items in one transaction without reading or changing numeric stock. New
+orders start pending until ToneFlowers confirms availability. Vodafone Cash
+instructions are shown only after that confirmation. After commit, a background task
 sends the owner email. A mail failure is logged and cannot undo the order.
 The email task uses its own database session and sets `notified_at` only after
 all configured recipients are accepted by SMTP. A null value means successful
@@ -190,8 +207,8 @@ Both customer and receiver mobile numbers are normalized to `+201xxxxxxxx`;
 the optional email address is validated. An order can move from pending to
 confirmed or cancelled, confirmed to preparing or cancelled, preparing to
 out_for_delivery or cancelled, and out_for_delivery to delivered. Delivered
-and cancelled orders are final. Cancellation returns all item quantities to
-stock in the same transaction as the status change, exactly once.
+and cancelled orders are final. Cancellation changes order status only; it does
+not mutate legacy product stock.
 
 Business dates use `Africa/Cairo` (including Egypt's daylight saving rules).
 New timestamps are timezone-aware in Python and returned as Cairo times.
@@ -208,14 +225,28 @@ bilingual FAQ and a public WhatsApp handoff; it makes no AI/API calls.
 
 ### Demo catalog and image sources
 
-The seed command creates eight bilingual, clearly marked `DEMO -` products only
-when `APP_ENV` is `development` or `staging`. Their sample prices and descriptions
-are temporary; replace them before accepting real orders. Product image URLs are
-left empty, so the storefront's built-in placeholder is used. No third-party
-demo photos were added because image licensing/provenance could not be verified
-for this catalog. See [frontend/public/images/SOURCES.md](frontend/public/images/SOURCES.md)
-for the asset provenance note. Existing project branding imagery is retained;
-confirm its rights with the shop owner before production publication.
+Run `python -m backend.seed_demo_catalog` only in development or staging. It
+upserts eight bilingual products with names marked `DEMO -`, sample prices,
+descriptions, and varied featured/best-seller flags. It refuses production.
+Run `python -m backend.remove_demo_catalog` to delete only known seed-owned demo
+records; cleanup aborts if a demo product is referenced by an order. Demo image
+URLs remain empty because no source/license could be confidently verified, so
+the storefront placeholder is used. See
+[frontend/public/images/SOURCES.md](frontend/public/images/SOURCES.md).
+
+**REPLACE DEMO PRODUCTS AND DEMO PRICES WITH REAL TONEFLOWERS DATA BEFORE PUBLIC LAUNCH.**
+
+### Product image uploads
+
+Admins can upload JPEG, PNG, or WebP images up to 5 MB, or continue using an
+external HTTP(S) image URL. Uploads are decoded and re-encoded, named randomly,
+and served from the configured media URL. SVG, GIF, mismatched content, and
+unknown formats are rejected. Development stores files under `media/products/`.
+Production uploads remain disabled unless a persistent disk is mounted at
+`MEDIA_DIR` and `MEDIA_PERSISTENT_STORAGE=true` is set. Configure backups and
+serve the durable disk at `MEDIA_BASE_URL`; the default container filesystem is
+not durable. No cloud storage vendor is integrated. Use external image URLs if
+durable production storage has not been configured.
 
 ## Tests
 
@@ -256,11 +287,10 @@ and compare types, nullability, defaults, indexes and foreign keys with the mode
 They also verify that the catalog-default migration preserves existing rows.
 
 The PostgreSQL concurrency tests use independent connections at `READ COMMITTED`
-and real local HTTP requests. They force overlapping attempts for the last stock
-unit, reversed product lists (12 pairs), cancellation, and shared idempotency
-keys. They also cover a replay whose initial lookup precedes the winner's commit,
-then observes exhausted stock, and a second-item failure after the first stock
-decrement. All automated notifications are mocked. The seven PostgreSQL-specific
+and real local HTTP requests. They cover overlapping orders with zero legacy
+stock, reversed item lists, cancellation, and shared idempotency keys. They also
+cover replay after the winner commits and inactive-product rejection. All
+automated notifications are mocked. The seven PostgreSQL-specific
 tests are explicitly skipped when `TEST_DATABASE_URL` is absent.
 
 PostgreSQL stores `created_at` and `notified_at` as `TIMESTAMP WITH TIME ZONE`.
@@ -311,6 +341,9 @@ ADMIN_PASSWORD_HASH=pbkdf2_sha256$REPLACE_WITH_32_HEX_SALT$REPLACE_WITH_64_HEX_D
 ADMIN_SESSION_SECRET=REPLACE_WITH_A_GENERATED_RANDOM_SECRET
 WHATSAPP_NUMBER=PUBLIC_SHOP_WHATSAPP_NUMBER
 VODAFONE_CASH_NUMBER=PUBLIC_VODAFONE_CASH_NUMBER
+MEDIA_DIR=/var/lib/toneflowers/media
+MEDIA_BASE_URL=/media
+MEDIA_PERSISTENT_STORAGE=true
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USERNAME=sender@example.com
@@ -556,21 +589,26 @@ because they are customer-facing payment/contact details. No admin or mail
 credentials are included in that response. Local business values belong in the
 ignored backend `.env`; `.env.example` contains placeholders only.
 
-Product image values stay in `image_url`. The admin form accepts an absolute
-HTTP(S) URL without credentials. There is no local upload endpoint: the current
-repository has no persistent media-storage service, and local container disks
-are not treated as durable production storage. Use intentionally licensed,
-stable image hosting for real products. Demo products use no image URL and rely
-on the existing storefront placeholder; no unverified stock images are added.
+Product image values stay in `image_url`; admins can upload JPEG, PNG, and WebP
+images up to 5 MB or keep using an external HTTP(S) image URL. Development files
+are stored under `media/products/`. Production uploads are disabled unless a
+persistent disk is mounted at `MEDIA_DIR` and `MEDIA_PERSISTENT_STORAGE=true` is
+explicitly set. Configure backups and serve that disk at `MEDIA_BASE_URL`.
+Ephemeral container storage is not durable. No cloud storage vendor is
+integrated; use approved external image URLs until persistent media is ready.
+Demo products have no photos and use the storefront placeholder.
 
 The API base is configured in one place, `frontend/src/config.ts`, through
 `VITE_API_URL`. Its localhost fallback is for development; components contain
-no localhost API URLs. Set the real API URL **before** building. Vite substitutes
-these public variables at build time, so changing the host environment after
-building does not update an existing bundle; rebuild it.
+no localhost API URLs. Set the real API URL **before** building. Set
+`VITE_SITE_URL` only after the real frontend origin is selected; when it is
+empty, the app emits no canonical URL. Vite substitutes public variables at
+build time, so changing the host environment after building does not update an
+existing bundle; rebuild it.
 
 ```dotenv
 VITE_API_URL=https://api.example.com
+VITE_SITE_URL=
 VITE_PHONE=PUBLIC_SHOP_PHONE
 VITE_EMAIL=public-contact@example.com
 VITE_FACEBOOK_URL=https://www.facebook.com/YOUR_PUBLIC_PAGE
@@ -602,27 +640,32 @@ deployment target is chosen.
 - [ ] Configure restricted app/migration roles; verify app DML works and DDL is denied.
 - [ ] Configure all real backend variables and `APP_ENV=staging`; generate a fresh strong admin key.
 - [ ] Configure the browser-admin login email, PBKDF2 password hash and session secret; verify login/logout and CSRF rejection.
-- [ ] Run `python -m backend.seed_catalog`; verify active Cairo/Giza zones show 50.00 EGP and remove/replace demo products before real orders.
+- [ ] Run `python -m backend.seed_catalog`; verify active Cairo/Giza zones show 50.00 EGP.
+- [ ] Seed demo products only in development/staging; run `python -m backend.remove_demo_catalog` before public launch.
+- [ ] Configure persistent media before enabling uploads; otherwise keep uploads disabled and use approved image URLs.
 - [ ] Configure exact HTTPS CORS origins and build-time `VITE_API_URL`.
 - [ ] Enable HTTPS for frontend/API and verify database TLS/network restrictions.
 - [ ] Verify automatic backups, retention, pre-migration backup and an isolated restore drill.
 - [ ] Apply migrations once with the migrator role; `alembic check` passes.
 - [ ] Start the API with the app role; unauthenticated `GET /health` returns 200.
 - [ ] Verify sensitive order routes reject missing/wrong keys and unauthenticated sessions; confirm browser session access works.
-- [ ] Replace test products with real Arabic/English names, images, prices and stock.
+- [ ] Replace demo products with real Arabic/English names, approved images and real prices.
 - [ ] Check direct SPA routes, refreshes and mobile checkout on a real device.
-- [ ] With owner approval, place one TEST ONLY order; verify fields, total, Cairo time and stock.
+- [ ] With owner approval, place one TEST ONLY order; verify fields, backend total, Cairo time, pending availability confirmation and no stock mutation.
 - [ ] Confirm one notification in both owner inboxes and non-null `notified_at`.
 - [ ] Verify the test order in the private admin list.
-- [ ] Cancel through the admin status endpoint; stock returns exactly once.
+- [ ] Confirm availability, progress status, verify payment, and test cancellation without stock mutation; verify the manual-refund warning for paid cancellation.
 - [ ] Verify same-key replay/conflict behavior and no duplicate notification.
 - [ ] Review sanitized logs, restart behavior and the owner's manual notification-failure procedure.
 - [ ] Complete all checks before a separate production deployment approval.
 
-Remaining launch blockers: choose hosting/domains, provision environment-specific
-database/roles/secrets, enable HTTPS and backups, confirm both recipient inboxes,
-replace the test catalog, and perform the approved staging/mobile checks. No
-production deployment or external configuration has been performed here.
+Remaining launch blockers: choose hosting and real frontend/API origins, provision
+environment-specific database/roles/secrets, enable HTTPS and backups, configure
+persistent media or keep uploads disabled, confirm both recipient inboxes,
+replace demo products/prices, verify image rights, and complete authorized
+staging/mobile checks. No production deployment or external configuration has
+been performed here.
 
-The authentic ToneFlowers logo is sourced from the shop's public Facebook
-profile. The homepage floral photograph is an original generated site asset.
+The existing logo and homepage floral photograph were present before this pass;
+their commercial usage rights are not established in this repository. Confirm
+rights with the shop owner before public launch.
