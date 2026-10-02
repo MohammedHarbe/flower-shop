@@ -45,9 +45,6 @@ class OrderCreate(BaseModel):
     payment_method: PaymentMethod = PaymentMethod.cash_on_delivery
     payment_status: PaymentStatus | None = None
     delivery_zone_id: int | None = Field(default=None, gt=0)
-    delivery_latitude: float | None = Field(default=None, ge=-90, le=90)
-    delivery_longitude: float | None = Field(default=None, ge=-180, le=180)
-    google_place_id: str | None = Field(default=None, max_length=200)
 
     card_message: str | None = Field(default=None, max_length=500)
     sender_name_on_card: str | None = Field(default=None, max_length=150)
@@ -125,9 +122,6 @@ class OrderResponse(BaseModel):
     payment_method: PaymentMethod
     payment_status: PaymentStatus
     delivery_zone_id: int | None
-    delivery_latitude: float | None
-    delivery_longitude: float | None
-    google_place_id: str | None
 
     card_message: str | None
     sender_name_on_card: str | None

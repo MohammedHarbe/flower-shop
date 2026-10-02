@@ -51,7 +51,7 @@ ORDER_REQUEST_FIELDS = (
     "customer_name", "customer_phone", "customer_email", "receiver_name",
     "receiver_phone", "governorate", "delivery_address", "delivery_area",
     "delivery_date", "delivery_slot", "payment_method", "payment_status",
-    "delivery_zone_id", "delivery_latitude", "delivery_longitude", "google_place_id",
+    "delivery_zone_id",
     "card_message", "sender_name_on_card", "customer_note",
 )
 
@@ -184,9 +184,6 @@ def create_order(
             payment_method=order.payment_method,
             payment_status=order.payment_status,
             delivery_zone_id=order.delivery_zone_id,
-            delivery_latitude=order.delivery_latitude,
-            delivery_longitude=order.delivery_longitude,
-            google_place_id=order.google_place_id,
             card_message=order.card_message,
             sender_name_on_card=order.sender_name_on_card,
             customer_note=order.customer_note,

@@ -372,7 +372,6 @@ class OrderTests(unittest.TestCase):
     def test_notification_contains_saved_details_and_two_recipients(self):
         tasks = BackgroundTasks()
         payload = self.payload()
-        payload.update(delivery_latitude=30.0, delivery_longitude=31.0)
         create_order(OrderCreate.model_validate(payload), tasks, self.db)
         settings = Settings(
             _env_file=None,
@@ -417,8 +416,6 @@ class OrderTests(unittest.TestCase):
             "200.00",
         ):
             self.assertIn(expected, body)
-        self.assertNotIn("location:", body.lower())
-        self.assertNotIn("30.0, 31.0", body)
 
     def test_admin_order_list_filters_and_newest_first(self):
         first = create_order(OrderCreate.model_validate(self.payload()), BackgroundTasks(), self.db)

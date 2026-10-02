@@ -296,7 +296,7 @@ class DeploymentHttpTests(unittest.TestCase):
         for field in (
             "customer_name", "customer_phone", "customer_email", "receiver_name",
             "receiver_phone", "delivery_address", "card_message", "customer_note",
-            "idempotency_key", "delivery_latitude", "delivery_longitude",
+            "idempotency_key",
         ):
             self.assertNotIn(field, body)
             self.assertNotIn(field, replay_body)
