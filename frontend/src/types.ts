@@ -59,7 +59,7 @@ export interface OrderCreatePayload {
   delivery_date: string
   delivery_slot: DeliverySlot
   payment_method: PaymentMethod
-  delivery_zone_id: number | null
+  delivery_zone_id: number
   card_message: string | null
   sender_name_on_card: string | null
   customer_note: string | null
@@ -71,9 +71,10 @@ export interface OrderItemResponse extends OrderItemInput {
   subtotal: string
 }
 
-export interface OrderResponse extends Omit<OrderCreatePayload, 'items' | 'idempotency_key' | 'delivery_slot'> {
+export interface OrderResponse extends Omit<OrderCreatePayload, 'items' | 'idempotency_key' | 'delivery_slot' | 'delivery_zone_id'> {
   id: number
   idempotency_key: string | null
+  delivery_zone_id: number | null
   delivery_slot: string
   payment_status: PaymentStatus
   status: string

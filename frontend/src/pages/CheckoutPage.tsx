@@ -74,8 +74,10 @@ export function CheckoutPage() {
   const [publicConfig, setPublicConfig] = useState<PublicConfig | null>(null)
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | ''>('')
   const [selectedZoneId, setSelectedZoneId] = useState<number | ''>('')
-  const availableZones = zones.filter((zone) => zone.governorate === fields.governorate)
-  const selectedZone = zones.find((zone) => zone.id === selectedZoneId)
+  const availableZones = zones.filter((zone) => zone.active && zone.governorate === fields.governorate && moneyAmount(zone.fee) > 0)
+  const selectedZone = availableZones.length === 1
+    ? availableZones[0]
+    : availableZones.find((zone) => zone.id === selectedZoneId)
   const subtotal = lines.reduce((sum, line) => sum + (line.product ? moneyAmount(line.product.price) * line.quantity : 0), 0)
   const deliveryFee = selectedZone ? moneyAmount(selectedZone.fee) : 0
   const total = selectedZone ? subtotal + deliveryFee : null
@@ -227,16 +229,11 @@ export function CheckoutPage() {
                   <option value="Giza">{t.checkout.giza}</option>
                 </select></label>
                 <label>{t.checkout.area}<input required maxLength={100} value={fields.delivery_area} onChange={(event) => setField('delivery_area', event.target.value)} /></label>
-                <div className="wide-field delivery-zone-field"><label htmlFor="delivery-zone-select">{t.checkout.deliveryZone}</label><select id="delivery-zone-select" required disabled={zonesLoading || zonesUnavailable || availableZones.length === 0} value={selectedZoneId} onChange={(event) => {
-                  const zoneId = event.target.value ? Number(event.target.value) : ''
-                  setSelectedZoneId(zoneId)
-                  const zone = zones.find((item) => item.id === zoneId)
-                  if (zone) setField('delivery_area', deliveryZoneName(zone, language))
-                }}>
-                  <option value="">{zonesLoading ? t.common.loading : t.checkout.chooseDeliveryZone}</option>
+                {availableZones.length > 1 && <div className="wide-field delivery-zone-field"><label htmlFor="delivery-zone-select">{t.checkout.deliveryZone}</label><select id="delivery-zone-select" required disabled={zonesLoading || zonesUnavailable} value={selectedZoneId} onChange={(event) => setSelectedZoneId(event.target.value ? Number(event.target.value) : '')}>
+                  <option value="">{t.checkout.chooseDeliveryZone}</option>
                   {availableZones.map((zone) => <option key={zone.id} value={zone.id}>{deliveryZoneName(zone, language)} · {formatMoney(moneyAmount(zone.fee), language)}</option>)}
-                </select>
-                {zonesUnavailable ? <span className="field-hint zone-load-error"><span>{t.checkout.zonesUnavailable}</span><button type="button" className="button button-outline" onClick={() => void loadZones()} disabled={zonesLoading}>{zonesLoading ? t.common.loading : t.common.retry}</button></span> : availableZones.length === 0 && !zonesLoading ? <small className="field-hint">{t.checkout.noZones}</small> : null}</div>
+                </select></div>}
+                {zonesUnavailable ? <div className="wide-field"><span className="field-hint zone-load-error"><span>{t.checkout.zonesUnavailable}</span><button type="button" className="button button-outline" onClick={() => void loadZones()} disabled={zonesLoading}>{zonesLoading ? t.common.loading : t.common.retry}</button></span></div> : fields.governorate && availableZones.length === 0 && !zonesLoading ? <div className="wide-field"><small className="field-hint">{t.checkout.noZones}</small></div> : null}
                 <label className="wide-field">{t.checkout.address}<textarea required rows={3} maxLength={500} value={fields.delivery_address} onChange={(event) => setField('delivery_address', event.target.value)} /></label>
                 <label>{t.checkout.date}<input type="date" required min={todayLocal()} value={fields.delivery_date} onChange={(event) => setField('delivery_date', event.target.value)} /></label>
                 <label>{t.checkout.slot}<select required value={fields.delivery_slot} onChange={(event) => setField('delivery_slot', event.target.value as Fields['delivery_slot'])}>

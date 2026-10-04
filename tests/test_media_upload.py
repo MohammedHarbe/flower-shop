@@ -12,7 +12,7 @@ from PIL import Image
 from backend.admin_auth import require_admin_key
 from backend.settings import Settings
 from tests.db_support import isolated_database
-from tests.http_support import order_api
+from tests.http_support import order_api, request_json
 
 
 def image_bytes(image_format: str) -> bytes:
@@ -78,6 +78,8 @@ class ProductImageUploadTests(unittest.TestCase):
                 self.assertEqual(status, 413)
             except (ConnectionResetError, ConnectionAbortedError, OSError):
                 pass  # Server correctly closed the connection during upload.
+            health_status, _ = request_json(base, "/health")
+            self.assertEqual(health_status, 200)
             # The critical assertion: no file must have been written to disk.
             product_dir = Path(self.temp_dir.name) / "products"
             saved = list(product_dir.glob("*")) if product_dir.exists() else []

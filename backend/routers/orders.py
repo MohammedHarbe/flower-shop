@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from backend.admin_auth import require_admin_key
 from backend.database import get_db
+from backend.delivery_region import DeliveryGovernorate
 from backend.logging_utils import log_failure
 from backend.models.delivery_zone import DeliveryZone
 from backend.models.order import Order, OrderItem
@@ -56,15 +57,18 @@ ORDER_REQUEST_FIELDS = (
 )
 
 
-def _delivery_zone_fee(db: Session, delivery_zone_id: int | None) -> Decimal:
-    if delivery_zone_id is None:
-        return Decimal("0.00")
+def _delivery_zone_fee(db: Session, delivery_zone_id: int, governorate: DeliveryGovernorate) -> Decimal:
     zone = db.get(DeliveryZone, delivery_zone_id)
     if zone is None:
         raise HTTPException(404, "Delivery zone not found")
     if not zone.active:
         raise HTTPException(400, "Delivery zone is inactive")
-    return Decimal(zone.fee)
+    if zone.governorate != governorate:
+        raise HTTPException(400, "Delivery zone does not match governorate")
+    fee = Decimal(zone.fee)
+    if fee <= 0:
+        raise HTTPException(503, "Delivery is temporarily unavailable")
+    return fee
 
 
 def _replay_order(existing: Order, request: OrderCreate, http_response: Response | None) -> OrderResponse:
@@ -82,7 +86,7 @@ def _replay_order(existing: Order, request: OrderCreate, http_response: Response
 def list_delivery_zones_public(db: Session = Depends(get_db)):
     return (
         db.query(DeliveryZone)
-        .filter(DeliveryZone.active.is_(True))
+        .filter(DeliveryZone.active.is_(True), DeliveryZone.fee > Decimal("0.00"))
         .order_by(DeliveryZone.sort_order.asc(), DeliveryZone.id.asc())
         .all()
     )
@@ -166,7 +170,7 @@ def create_order(
             product_names[product.id] = product.name
             validated_items.append((product, item.quantity, unit_price, item_subtotal))
 
-        delivery_fee = _delivery_zone_fee(db, order.delivery_zone_id)
+        delivery_fee = _delivery_zone_fee(db, order.delivery_zone_id, order.governorate)
         total_price = subtotal + delivery_fee
         validated_items.sort(key=lambda entry: entry[0].id)
         new_order = Order(
@@ -272,6 +276,15 @@ def update_order_payment_status(
     allowed_targets = PAYMENT_ALLOWED_TRANSITIONS.get(order.payment_status, set())
     if payment_update.status not in allowed_targets:
         raise HTTPException(409, f"Cannot change payment status from {order.payment_status.value} to {payment_update.status.value}")
+    if (
+        order.payment_method == PaymentMethod.vodafone_cash
+        and payment_update.status == PaymentStatus.paid
+        and order.status not in {
+            OrderStatus.confirmed, OrderStatus.preparing,
+            OrderStatus.out_for_delivery, OrderStatus.delivered,
+        }
+    ):
+        raise HTTPException(409, "Confirm availability before marking Vodafone Cash payment as paid")
 
     order.payment_status = payment_update.status
     db.commit()

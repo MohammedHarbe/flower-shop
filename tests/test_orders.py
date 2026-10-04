@@ -22,6 +22,7 @@ from backend.payment_status import PaymentStatus
 from backend.routers.orders import (
     create_order,
     get_order,
+    list_delivery_zones_public,
     list_orders,
     update_order_payment_status,
     update_order_status,
@@ -39,14 +40,19 @@ class OrderTests(unittest.TestCase):
     def setUp(self):
         self.engine = self.enterContext(isolated_database())
         self.db = Session(self.engine)
+        zones = [
+            DeliveryZone(governorate=governorate, name_en=governorate, fee=Decimal("50.00"), active=True)
+            for governorate in ("Cairo", "Giza")
+        ]
         self.db.add_all(
             [
                 Product(name="Roses", price=Decimal("100.00"), stock=5, active=True),
                 Product(name="Lilies", price=Decimal("75.50"), stock=3, active=True),
                 Product(name="Inactive", price=Decimal("20.00"), stock=2, active=False),
-            ]
+            ] + zones
         )
         self.db.commit()
+        self.zone_ids = {"Cairo": zones[0].id, "Giza": zones[1].id}
 
     def tearDown(self):
         self.db.close()
@@ -61,6 +67,7 @@ class OrderTests(unittest.TestCase):
             "receiver_name": "Receiver",
             "receiver_phone": "01112345678",
             "governorate": governorate,
+            "delivery_zone_id": self.zone_ids.get(governorate, self.zone_ids["Cairo"]),
             "delivery_address": "1 Flower Street",
             "delivery_area": "Nasr City",
             "delivery_date": cairo_today() + timedelta(days=1),
@@ -79,7 +86,9 @@ class OrderTests(unittest.TestCase):
                 )
                 self.assertEqual(response.governorate.value, governorate)
                 self.assertEqual(response.status.value, "pending")
-                self.assertEqual(response.total_price, Decimal("200.00"))
+                self.assertEqual(response.delivery_fee, Decimal("50.00"))
+                self.assertEqual(response.total_price, Decimal("250.00"))
+                self.assertEqual(response.delivery_zone_id, self.zone_ids[governorate])
                 self.assertEqual(response.items[0].unit_price, Decimal("100.00"))
                 self.assertEqual(response.customer_phone, "+201012345678")
                 self.assertIsNone(response.notified_at)
@@ -98,6 +107,8 @@ class OrderTests(unittest.TestCase):
             {"items": [{"product_id": 1, "quantity": 1}, {"product_id": 1, "quantity": 1}]},
             {"delivery_date": cairo_today() - timedelta(days=1)},
             {"idempotency_key": "not-a-uuid"},
+            {"subtotal": "0.01"},
+            {"delivery_fee": "0.00"},
             {"total_price": "0.01"},
         ):
             with self.subTest(changes=changes), self.assertRaises(ValidationError):
@@ -106,6 +117,12 @@ class OrderTests(unittest.TestCase):
         del missing_key["idempotency_key"]
         with self.assertRaises(ValidationError):
             OrderCreate.model_validate(missing_key)
+        missing_zone = self.payload()
+        del missing_zone["delivery_zone_id"]
+        with self.assertRaises(ValidationError):
+            OrderCreate.model_validate(missing_zone)
+        with self.assertRaises(ValidationError):
+            OrderCreate.model_validate({**self.payload(), "delivery_zone_id": None})
 
     def test_invalid_product_keeps_order_and_stock_unchanged(self):
         for product_id, expected_status in ((999, 404), (3, 400)):
@@ -230,6 +247,48 @@ class OrderTests(unittest.TestCase):
             )
         self.assertEqual(error.exception.status_code, 400)
 
+    def test_zone_must_match_governorate(self):
+        for governorate, wrong_zone in (
+            ("Cairo", self.zone_ids["Giza"]),
+            ("Giza", self.zone_ids["Cairo"]),
+        ):
+            with self.subTest(governorate=governorate):
+                tasks = BackgroundTasks()
+                body = {**self.payload(governorate=governorate), "delivery_zone_id": wrong_zone}
+                with self.assertRaises(HTTPException) as error:
+                    create_order(OrderCreate.model_validate(body), tasks, self.db)
+                self.assertEqual(error.exception.status_code, 400)
+                self.assertEqual(len(tasks.tasks), 0)
+        self.assertEqual(self.db.query(Order).count(), 0)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
+
+    def test_zero_fee_zone_cannot_create_order(self):
+        zone = DeliveryZone(
+            governorate="Cairo", name_en="Misconfigured", fee=Decimal("0.00"), active=True,
+        )
+        self.db.add(zone)
+        self.db.commit()
+        tasks = BackgroundTasks()
+        with self.assertRaises(HTTPException) as error:
+            create_order(
+                OrderCreate.model_validate({**self.payload(), "delivery_zone_id": zone.id}),
+                tasks, self.db,
+            )
+        self.assertEqual(error.exception.status_code, 503)
+        self.assertNotIn(zone.id, [listed.id for listed in list_delivery_zones_public(self.db)])
+        self.assertEqual(self.db.query(Order).count(), 0)
+        self.assertEqual(self.db.get(Product, 1).stock, 5)
+        self.assertEqual(len(tasks.tasks), 0)
+
+    def test_decimal_product_subtotal_plus_backend_delivery_fee(self):
+        body = self.payload(items=[{"product_id": 2, "quantity": 3}], governorate="Giza")
+        created = create_order(OrderCreate.model_validate(body), BackgroundTasks(), self.db)
+        self.assertEqual(created.items[0].unit_price, Decimal("75.50"))
+        self.assertEqual(created.subtotal, Decimal("226.50"))
+        self.assertEqual(created.delivery_fee, Decimal("50.00"))
+        self.assertEqual(created.total_price, Decimal("276.50"))
+        self.assertEqual(self.db.get(Product, 2).stock, 3)
+
     def test_admin_payment_status_updates_only_valid_transitions(self):
         zone = DeliveryZone(
             governorate="Cairo",
@@ -264,6 +323,21 @@ class OrderTests(unittest.TestCase):
                 OrderPaymentStatusUpdate(status="unpaid"),
                 self.db,
             )
+
+    def test_vodafone_cash_payment_requires_confirmed_availability(self):
+        body = {**self.payload(), "payment_method": "vodafone_cash"}
+        created = create_order(OrderCreate.model_validate(body), BackgroundTasks(), self.db)
+        with self.assertRaises(HTTPException) as error:
+            update_order_payment_status(
+                created.id, OrderPaymentStatusUpdate(status="paid"), self.db,
+            )
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertEqual(self.db.get(Order, created.id).payment_status, PaymentStatus.awaiting_payment)
+        update_order_status(created.id, OrderStatusUpdate(status="confirmed"), self.db)
+        paid = update_order_payment_status(
+            created.id, OrderPaymentStatusUpdate(status="paid"), self.db,
+        )
+        self.assertEqual(paid.payment_status, PaymentStatus.paid)
 
     def test_product_list_only_returns_active_products(self):
         self.assertEqual([product.name for product in list_products(self.db)], ["Roses", "Lilies"])
@@ -410,8 +484,8 @@ class OrderTests(unittest.TestCase):
             "Payment preference: Cash on Delivery / الدفع عند الاستلام",
             "Payment status: Unpaid / غير مدفوع",
             "Subtotal: 200.00",
-            "Delivery fee: 0.00",
-            "Total: 200.00",
+            "Delivery fee: 50.00",
+            "Total: 250.00",
             "100.00",
             "200.00",
         ):
@@ -493,10 +567,17 @@ class OrderTests(unittest.TestCase):
     def test_idempotency_rejects_changed_order_payload(self):
         body = self.payload()
         created = create_order(OrderCreate.model_validate(body), BackgroundTasks(), self.db)
+        alternate_zone = DeliveryZone(
+            governorate="Cairo", name_en="Alternate Cairo", fee=Decimal("50.00"), active=True,
+        )
+        self.db.add(alternate_zone)
+        self.db.commit()
         for changes in (
             {"items": [{"product_id": 1, "quantity": 1}]},
             {"delivery_address": "2 Different Street"},
             {"customer_email": "other@example.com"},
+            {"delivery_zone_id": alternate_zone.id},
+            {"governorate": "Giza"},
         ):
             with self.subTest(changes=changes):
                 tasks = BackgroundTasks()
@@ -624,7 +705,10 @@ class OrderTests(unittest.TestCase):
         with isolated_database(file_backed=True) as engine:
             try:
                 with Session(engine) as db:
-                    db.add(Product(name="Roses", price=Decimal("100.00"), stock=10, active=True))
+                    db.add_all([
+                        Product(name="Roses", price=Decimal("100.00"), stock=10, active=True),
+                        DeliveryZone(governorate="Cairo", name_en="Cairo", fee=Decimal("50.00"), active=True),
+                    ])
                     db.commit()
                     created = create_order(
                         OrderCreate.model_validate(self.payload()), BackgroundTasks(), db,

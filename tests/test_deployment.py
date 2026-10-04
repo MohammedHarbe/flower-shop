@@ -269,7 +269,10 @@ class DeploymentHttpTests(unittest.TestCase):
         with isolated_database() as engine:
             with Session(engine) as db:
                 db.add(Product(name="Test Roses", price=Decimal("100.00"), stock=2, active=True))
+                zone = DeliveryZone(governorate="Cairo", name_en="Cairo", fee=Decimal("50.00"), active=True)
+                db.add(zone)
                 db.commit()
+                zone_id = zone.id
             with order_api(engine) as (base, _):
                 payload = {
                     "idempotency_key": str(uuid4()),
@@ -279,6 +282,7 @@ class DeploymentHttpTests(unittest.TestCase):
                     "receiver_name": "Private Receiver",
                     "receiver_phone": "01012345679",
                     "governorate": "Cairo",
+                    "delivery_zone_id": zone_id,
                     "delivery_area": "Nasr City",
                     "delivery_address": "Private street address",
                     "delivery_date": str(cairo_today()),
@@ -291,7 +295,7 @@ class DeploymentHttpTests(unittest.TestCase):
                 replay_status, replay_body = request_json(base, "/orders", payload)
         self.assertEqual(status, 201)
         self.assertEqual(replay_status, 200)
-        self.assertEqual(body["total_price"], "100.00")
+        self.assertEqual(body["total_price"], "150.00")
         self.assertEqual(replay_body, body)
         for field in (
             "customer_name", "customer_phone", "customer_email", "receiver_name",

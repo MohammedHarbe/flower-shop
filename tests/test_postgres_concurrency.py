@@ -3,14 +3,17 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from threading import Barrier, Event
+from unittest.mock import patch
 from uuid import uuid4
 
 from sqlalchemy import event, text
 from sqlalchemy.orm import Session
 
+from backend.models.delivery_zone import DeliveryZone
 from backend.models.order import Order, OrderItem
 from backend.models.product import Product
 from backend.order_status import OrderStatus
+from backend.rate_limiter import InMemoryRateLimiter
 from backend.time_utils import CAIRO_TZ, cairo_now, cairo_today
 from tests.db_support import isolated_database, postgres_requested
 from tests.http_support import order_api, request_json
@@ -19,10 +22,20 @@ from tests.http_support import order_api, request_json
 @unittest.skipUnless(postgres_requested(), "Set TEST_DATABASE_URL for real PostgreSQL concurrency tests")
 class PostgresConcurrencyTests(unittest.TestCase):
     def setUp(self):
+        # HTTP concurrency tests share an in-process client address; isolate
+        # rate-limit history so earlier tests cannot consume this test's quota.
+        self.enterContext(patch("backend.rate_limiter.RATE_LIMITER", InMemoryRateLimiter()))
         self.engine = self.enterContext(isolated_database())
         self.assertEqual(self.engine.dialect.name, "postgresql")
         with self.engine.connect() as connection:
             self.assertEqual(connection.get_isolation_level(), "READ COMMITTED")
+        with Session(self.engine) as db:
+            zone = DeliveryZone(
+                governorate="Cairo", name_en="Cairo", fee=Decimal("50.00"), active=True,
+            )
+            db.add(zone)
+            db.commit()
+            self.zone_id = zone.id
         self.base, self.notification = self.enterContext(order_api(self.engine))
 
     def seed(self, stock, count=1):
@@ -42,6 +55,7 @@ class PostgresConcurrencyTests(unittest.TestCase):
             "receiver_name": "Receiver",
             "receiver_phone": "01112345678",
             "governorate": "Cairo",
+            "delivery_zone_id": self.zone_id,
             "delivery_area": "Nasr City",
             "delivery_address": "1 Flower Street",
             "delivery_date": (cairo_today() + timedelta(days=1)).isoformat(),
@@ -186,10 +200,12 @@ class PostgresConcurrencyTests(unittest.TestCase):
         self.seed(10)
         code, order = self.post(self.payload(quantity=3))
         self.assertEqual(code, 201)
-        self.assertEqual(order["total_price"], "226.50")
+        self.assertEqual(order["subtotal"], "226.50")
+        self.assertEqual(order["delivery_fee"], "50.00")
+        self.assertEqual(order["total_price"], "276.50")
         with Session(self.engine) as db:
             saved = db.get(Order, order["id"])
-            self.assertEqual(saved.total_price, Decimal("226.50"))
+            self.assertEqual(saved.total_price, Decimal("276.50"))
             self.assertEqual(saved.items[0].unit_price, Decimal("75.50"))
             saved.notified_at = cairo_now()
             db.commit()

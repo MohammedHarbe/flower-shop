@@ -44,7 +44,7 @@ class OrderCreate(BaseModel):
     delivery_slot: DeliverySlot
     payment_method: PaymentMethod = PaymentMethod.cash_on_delivery
     payment_status: PaymentStatus | None = None
-    delivery_zone_id: int | None = Field(default=None, gt=0)
+    delivery_zone_id: int = Field(gt=0)
 
     card_message: str | None = Field(default=None, max_length=500)
     sender_name_on_card: str | None = Field(default=None, max_length=150)
